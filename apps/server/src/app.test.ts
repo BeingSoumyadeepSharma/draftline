@@ -1,3 +1,7 @@
+/**
+ * API tests. Each runs createApp against an in-memory database and a fake AI,
+ * so no network, AI provider or real data is involved.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EMPTY_PROFILE,
@@ -6,7 +10,8 @@ import {
   type Profile,
 } from "@draftline/shared";
 import { createApp } from "./app.js";
-import { extractionToProfile, ResumeParseError } from "./resume.js";
+import { AiError } from "./ai-error.js";
+import { extractionToProfile } from "./resume.js";
 import { createStore } from "./store.js";
 
 const HOST = { host: "127.0.0.1:8787" };
@@ -26,16 +31,18 @@ function pdfForm(bytes = "%PDF-1.7 fake") {
 describe("api", () => {
   let store: ReturnType<typeof createStore>;
   let parseResume: ReturnType<typeof vi.fn<(pdf: Buffer) => Promise<Profile>>>;
+  let generate: ReturnType<typeof vi.fn>;
   let aiConfigured: boolean;
   let app: ReturnType<typeof createApp>;
 
   beforeEach(() => {
     store = createStore(":memory:");
     parseResume = vi.fn(async () => draft);
+    generate = vi.fn();
     aiConfigured = true;
     app = createApp({
       store,
-      parseResume,
+      ai: { parseResume, generate: generate as never },
       hasEnvClaudeKey: () => aiConfigured,
     });
   });
@@ -131,6 +138,100 @@ describe("api", () => {
     expect(res.status).toBe(200);
   });
 
+  const job = {
+    url: "https://jobs.example.com/1",
+    title: "Engineer",
+    company: "Acme",
+    location: "Remote",
+    description: "We need someone who builds payment systems. ".repeat(10),
+  };
+  const analysisOutput = {
+    title: "Engineer",
+    company: "Acme",
+    location: "Remote",
+    summary: "Build payments.",
+    mustHaves: ["Payments"],
+    niceToHaves: [],
+    score: 140,
+    verdict: "Good fit.",
+    strengths: [{ point: "Payments work", sourceIds: ["summary", "made-up"] }],
+    gaps: [],
+  };
+  const analyze = (refresh = false) =>
+    app.request(`/api/jobs/analyze${refresh ? "?refresh=1" : ""}`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(job),
+    });
+
+  it("analyzes a job once and returns the saved result after", async () => {
+    store.saveProfile({ ...draft, summary: "I build payment systems." });
+    generate.mockResolvedValue(analysisOutput);
+
+    const first = await analyze();
+    expect(first.status).toBe(200);
+    const record = await first.json();
+    expect(record.analysis.score).toBe(100);
+    expect(record.analysis.strengths[0].sources.map((s: { id: string }) => s.id)).toEqual([
+      "summary",
+    ]);
+
+    await analyze();
+    expect(generate).toHaveBeenCalledTimes(1);
+    await analyze(true);
+    expect(generate).toHaveBeenCalledTimes(2);
+
+    const lookup = await app.request(
+      `/api/jobs/lookup?url=${encodeURIComponent(job.url)}`,
+      { headers: HOST },
+    );
+    expect((await lookup.json()).id).toBe(record.id);
+  });
+
+  it("refuses to analyze without enough description or an AI provider", async () => {
+    const short = await app.request("/api/jobs/analyze", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ ...job, description: "Too short" }),
+    });
+    expect(short.status).toBe(400);
+
+    aiConfigured = false;
+    expect((await analyze()).status).toBe(503);
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("passes AI failures through with their status", async () => {
+    generate.mockRejectedValue(new AiError("Rate limited", 429));
+    const res = await analyze();
+    expect(res.status).toBe(429);
+    expect((await res.json()).error).toBe("Rate limited");
+  });
+
+  it("drafts answers for a saved job", async () => {
+    generate.mockResolvedValueOnce(analysisOutput);
+    const { id } = await (await analyze()).json();
+    generate.mockResolvedValueOnce({
+      answers: [{ key: "q1", answer: "I build payments.", sourceIds: [], note: "" }],
+    });
+
+    const res = await app.request(`/api/jobs/${id}/answers`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        questions: [
+          { key: "q1", label: "Tell us about you", kind: "textarea", options: [], maxLength: null },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).answers[0]).toMatchObject({
+      key: "q1",
+      answer: "I build payments.",
+      unsupported: true,
+    });
+  });
+
   it("allows only Draftline's own extension", async () => {
     const own = await app.request("/api/profile", {
       headers: { ...HOST, origin: `chrome-extension://${EXTENSION_ID}` },
@@ -220,7 +321,7 @@ describe("api", () => {
   });
 
   it("passes import failures through with their status", async () => {
-    parseResume.mockRejectedValue(new ResumeParseError("Too many requests", 429));
+    parseResume.mockRejectedValue(new AiError("Too many requests", 429));
     const res = await app.request("/api/resume/parse", {
       method: "POST",
       headers: HOST,

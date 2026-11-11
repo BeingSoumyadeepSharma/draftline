@@ -1,11 +1,21 @@
+/**
+ * Decides, with fixed rules and no AI, what each field should get: a profile
+ * value, a saved answer, the resume, or nothing ("needs you"). Runs in the side
+ * panel.
+ *
+ * The rules prefer leaving a field for the user over guessing. Sensitive
+ * questions can only be filled from the user's own saved answers.
+ */
 import type { Answer, Profile } from "@draftline/shared";
+import { intentsOf } from "@draftline/shared/questions";
 import type { FieldDescriptor } from "./types";
 
 export type Decision =
   | { status: "ready"; value: string; source: string; note?: string }
   /** A likely match the user must opt in to. Unticked by default. */
   | { status: "confirm"; value: string; source: string; note: string }
-  | { status: "needs_you"; reason: string }
+  /** canDraft: no rule or saved answer covers it, so AI may suggest a draft. */
+  | { status: "needs_you"; reason: string; canDraft?: boolean }
   | { status: "skip"; reason: string };
 
 export type MatchData = {
@@ -22,31 +32,6 @@ const normalize = (text: string) =>
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 
-/**
- * Topics where the wording varies between forms but the saved answer is the
- * same. Anything sensitive must land here or match a saved question exactly,
- * so it can never be filled from a loose guess.
- */
-const INTENTS: ReadonlyArray<[string, RegExp]> = [
-  ["sponsorship", /sponsor/],
-  ["work_auth", /authori[sz]ed to work|right to work|eligible to work|work authori[sz]ation|legally (?:able|allowed) to work/],
-  ["salary", /salary|compensation expectation|desired (?:pay|compensation)|expected (?:pay|compensation)/],
-  ["gender", /\bgender\b/],
-  ["race", /\brace\b|ethnicity|hispanic/],
-  ["veteran", /veteran/],
-  ["disability", /disabilit/],
-  ["notice", /notice period|earliest start|start date|when can you start/],
-  ["relocate", /relocat/],
-  ["workplace", /hybrid|on-?site|in[- ]office/],
-  ["referral", /(?:how|where) did you (?:hear|find)/],
-];
-
-function intentsOf(text: string): string[] {
-  const lower = text.toLowerCase();
-  // Accommodation questions mention disability but ask something different.
-  if (/accommodat|adjustment/.test(lower)) return [];
-  return INTENTS.filter(([, pattern]) => pattern.test(lower)).map(([id]) => id);
-}
 
 /** Finds the option a saved value refers to, or null if unclear. */
 export function pickOption(value: string, options: string[]): string | null {
@@ -209,5 +194,9 @@ export function matchField(field: FieldDescriptor, data: MatchData): Decision {
     return withOptions(field, value, source);
   }
 
-  return { status: "needs_you", reason: "No saved answer for this question" };
+  return {
+    status: "needs_you",
+    reason: "No saved answer for this question",
+    canDraft: true,
+  };
 }

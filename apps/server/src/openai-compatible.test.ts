@@ -1,3 +1,7 @@
+/**
+ * Tests for the OpenAI-compatible client, using a fake fetch instead of a
+ * real provider.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { EMPTY_PROFILE } from "@draftline/shared";
 import { parseResumeCompatible } from "./openai-compatible.js";

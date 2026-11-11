@@ -1,21 +1,39 @@
+/**
+ * The local HTTP API, built with Hono. Only two callers are allowed: the web
+ * app (through Vite's proxy) and Draftline's own Chrome extension.
+ *
+ * Route groups:
+ *   /api/status, /api/settings/ai   whether AI is set up, and its settings
+ *   /api/profile                    the profile, as one JSON document
+ *   /api/resume/*                   resume import (AI) and the stored PDF
+ *   /api/jobs/*                     job fit analysis and answer drafts (AI)
+ *   /api/answers                    saved answers to common questions
+ *
+ * createApp receives its dependencies (database, AI service) as arguments, so
+ * tests can pass an in-memory database and a fake AI.
+ */
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
   AiSettingsInputSchema,
+  DraftRequestSchema,
+  JobInputSchema,
   AnswerInputSchema,
   EXTENSION_ID,
   ProfileSchema,
   type AiSettingsView,
   type ApiError,
-  type Profile,
+  type AnswerDraft,
+  type JobRecord,
   type ResumeFileMeta,
   type ResumeFilePayload,
   type ResumeParseResult,
   type Status,
 } from "@draftline/shared";
-import { aiSettingsView } from "./ai.js";
-import { ResumeParseError } from "./resume.js";
-import type { Store } from "./store.js";
+import { aiSettingsView, type AiService } from "./ai.js";
+import { AiError } from "./ai-error.js";
+import { analyzeJob, buildFacts, draftAnswers } from "./jobs.js";
+import type { JobRow, Store } from "./store.js";
 
 export const SERVER_PORT = 8787;
 const MAX_RESUME_BYTES = 10 * 1024 * 1024;
@@ -50,11 +68,11 @@ async function readPdfUpload(
 
 type Deps = {
   store: Store;
-  parseResume: (pdf: Buffer) => Promise<Profile>;
+  ai: AiService;
   hasEnvClaudeKey: () => boolean;
 };
 
-export function createApp({ store, parseResume, hasEnvClaudeKey }: Deps) {
+export function createApp({ store, ai, hasEnvClaudeKey }: Deps) {
   const aiView = () => aiSettingsView(store, hasEnvClaudeKey());
   const app = new Hono();
   const fail = (error: string): ApiError => ({ error });
@@ -74,10 +92,12 @@ export function createApp({ store, parseResume, hasEnvClaudeKey }: Deps) {
     await next();
   });
 
+  // Whether an AI provider is ready. Both UIs use it to enable AI buttons.
   app.get("/api/status", (c) =>
     c.json<Status>({ aiConfigured: aiView().configured }),
   );
 
+  // AI settings. The response never includes the API key itself.
   app.get("/api/settings/ai", (c) => c.json<AiSettingsView>(aiView()));
 
   app.put("/api/settings/ai", async (c) => {
@@ -94,6 +114,7 @@ export function createApp({ store, parseResume, hasEnvClaudeKey }: Deps) {
     return c.json<AiSettingsView>(aiView());
   });
 
+  // The profile is always read and replaced as a whole.
   app.get("/api/profile", (c) => c.json(store.getProfile()));
 
   app.put("/api/profile", async (c) => {
@@ -116,10 +137,10 @@ export function createApp({ store, parseResume, hasEnvClaudeKey }: Deps) {
       if ("error" in upload) return c.json(fail(upload.error), 400);
 
       try {
-        const profile = await parseResume(upload.pdf);
+        const profile = await ai.parseResume(upload.pdf);
         return c.json<ResumeParseResult>({ profile });
       } catch (error) {
-        if (error instanceof ResumeParseError) {
+        if (error instanceof AiError) {
           return c.json(fail(error.message), error.status);
         }
         throw error;
@@ -127,6 +148,7 @@ export function createApp({ store, parseResume, hasEnvClaudeKey }: Deps) {
     },
   );
 
+  // The resume PDF the extension attaches to applications.
   app.get("/api/resume/meta", (c) =>
     c.json<ResumeFileMeta | null>(store.getResumeMeta()),
   );
@@ -148,6 +170,91 @@ export function createApp({ store, parseResume, hasEnvClaudeKey }: Deps) {
     );
   });
 
+  // --- Jobs: fit analysis and answer drafts ---
+
+  // Database row to API shape: the stored analysis JSON is parsed here.
+  const toRecord = (row: JobRow): JobRecord => ({
+    id: row.id,
+    url: row.url,
+    title: row.title,
+    company: row.company,
+    location: row.location,
+    analysis: row.analysis ? JSON.parse(row.analysis) : null,
+    analyzedAt: row.analyzedAt,
+  });
+
+  const jsonBodyLimit = bodyLimit({
+    maxSize: 512 * 1024,
+    onError: (c) => c.json(fail("Request is too large"), 413),
+  });
+
+  const aiFailure = (c: Context, error: unknown) => {
+    if (error instanceof AiError) return c.json(fail(error.message), error.status);
+    throw error;
+  };
+
+  // The saved job for a page URL, so the panel can show an earlier analysis
+  // without paying for a new one.
+  app.get("/api/jobs/lookup", (c) => {
+    const row = store.findJobByUrl(c.req.query("url") ?? "");
+    return c.json<JobRecord | null>(row ? toRecord(row) : null);
+  });
+
+  // Saves the job and returns the cached analysis, or runs one when asked.
+  app.post("/api/jobs/analyze", jsonBodyLimit, async (c) => {
+    const parsed = JobInputSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json(fail("Draftline couldn't read enough of the job description."), 400);
+    }
+    if (!aiView().configured) {
+      return c.json(fail("Set up an AI provider in AI settings first."), 503);
+    }
+    const row = store.upsertJob(parsed.data);
+    // Drafting answers needs the job saved, but not a fit check.
+    if (c.req.query("save_only") === "1") {
+      return c.json<JobRecord>(toRecord(row));
+    }
+    if (row.analysis && c.req.query("refresh") !== "1") {
+      return c.json<JobRecord>(toRecord(row));
+    }
+    try {
+      const result = await analyzeJob(
+        ai.generate,
+        buildFacts(store.getProfile(), store.listAnswers()),
+        parsed.data,
+      );
+      return c.json<JobRecord>(
+        toRecord(store.saveJobAnalysis(row.id, result, result.analysis)),
+      );
+    } catch (error) {
+      return aiFailure(c, error);
+    }
+  });
+
+  // Drafts answers to the form's open questions. jobs.ts refuses sensitive
+  // ones and checks every draft before it's returned.
+  app.post("/api/jobs/:id/answers", jsonBodyLimit, async (c) => {
+    const row = store.getJob(c.req.param("id"));
+    if (!row) return c.json(fail("Job not found"), 404);
+    const parsed = DraftRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json(fail("Invalid questions"), 400);
+    if (!aiView().configured) {
+      return c.json(fail("Set up an AI provider in AI settings first."), 503);
+    }
+    try {
+      const answers = await draftAnswers(
+        ai.generate,
+        buildFacts(store.getProfile(), store.listAnswers()),
+        row,
+        parsed.data.questions,
+      );
+      return c.json<{ answers: AnswerDraft[] }>({ answers });
+    } catch (error) {
+      return aiFailure(c, error);
+    }
+  });
+
+  // --- Saved answers: list, add, edit, delete ---
   app.get("/api/answers", (c) => c.json(store.listAnswers()));
 
   app.post("/api/answers", async (c) => {
@@ -173,6 +280,7 @@ export function createApp({ store, parseResume, hasEnvClaudeKey }: Deps) {
       : c.json(fail("Answer not found"), 404),
   );
 
+  // Anything unexpected: log the details here, show the user a plain message.
   app.onError((error, c) => {
     console.error(error);
     return c.json(fail("Something went wrong on the server"), 500);

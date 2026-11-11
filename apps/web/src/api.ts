@@ -1,3 +1,8 @@
+/**
+ * Typed wrappers for the local server's API. Requests go to /api/..., which
+ * the Vite dev server forwards to 127.0.0.1:8787 (see vite.config.ts).
+ * Errors are thrown with the server's own message, ready to show the user.
+ */
 import type {
   AiSettingsInput,
   AiSettingsView,

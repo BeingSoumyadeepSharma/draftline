@@ -1,3 +1,6 @@
+/**
+ * Tests for the no-AI matching rules in match.ts.
+ */
 import { describe, expect, it } from "vitest";
 import { EMPTY_PROFILE, type Answer, type Profile } from "@draftline/shared";
 import {
@@ -192,5 +195,36 @@ describe("pickOption", () => {
   it("returns null when the choice is unclear", () => {
     expect(pickOption("Yes", ["Yes, now", "Yes, later"])).toBeNull();
     expect(pickOption("Maybe", ["Yes", "No"])).toBeNull();
+  });
+});
+
+describe("AI eligibility", () => {
+  it("lets AI draft only questions no rule covers", () => {
+    expect(matchField(field("Why do you want to join us?"), data)).toMatchObject({
+      status: "needs_you",
+      canDraft: true,
+    });
+    expect(matchField(field("Veteran status"), data)).not.toHaveProperty("canDraft");
+    expect(matchField(field("GitHub URL"), data)).not.toHaveProperty("canDraft");
+  });
+});
+
+describe("isSensitiveQuestion", () => {
+  it("covers protected and legal topics, not ordinary questions", async () => {
+    const { isSensitiveQuestion } = await import("@draftline/shared/questions");
+    for (const label of [
+      "Are you authorized to work in the US?",
+      "Do you require sponsorship?",
+      "What are your salary expectations?",
+      "Do you identify as transgender?",
+      "Have you ever been convicted of a crime?",
+      "Do you need any accommodations?",
+      "What is your citizenship?",
+    ]) {
+      expect(isSensitiveQuestion(label), label).toBe(true);
+    }
+    for (const label of ["Why do you want to join?", "Years of experience with Python", "Portfolio URL"]) {
+      expect(isSensitiveQuestion(label), label).toBe(false);
+    }
   });
 });

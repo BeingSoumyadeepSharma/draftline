@@ -1,3 +1,8 @@
+/**
+ * The Saved answers tab. Answers are grouped by category and each one saves
+ * when its field loses focus. Sensitive categories carry a note that AI never
+ * answers them; the extension and server enforce that.
+ */
 import { useEffect, useState } from "react";
 import {
   ANSWER_CATEGORIES,
@@ -15,6 +20,7 @@ const CATEGORY_LABELS: Record<AnswerCategory, string> = {
   general: "General",
 };
 
+/** One question and answer. Saves on blur; a blank question reverts. */
 function AnswerRow({
   answer,
   onSaved,

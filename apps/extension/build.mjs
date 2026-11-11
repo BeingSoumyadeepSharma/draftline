@@ -1,3 +1,8 @@
+/**
+ * Builds the extension into dist/. It bundles the service worker, content script
+ * and side panel with esbuild, and copies manifest.json and the panel's HTML.
+ * `--watch` rebuilds on every change. Load dist/ in chrome://extensions.
+ */
 import { copyFileSync, mkdirSync, rmSync } from "node:fs";
 import * as esbuild from "esbuild";
 

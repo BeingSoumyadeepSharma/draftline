@@ -1,3 +1,10 @@
+/**
+ * The AI settings tab. Presets fill in the address for common providers, and
+ * "Other" accepts any OpenAI-compatible API.
+ *
+ * The API key box is always empty when the page loads: the server never sends a
+ * saved key back, only whether one exists. Leaving it blank keeps the saved key.
+ */
 import { useEffect, useState } from "react";
 import type { AiProvider, AiSettingsView } from "@draftline/shared";
 import { api } from "./api";

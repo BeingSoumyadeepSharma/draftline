@@ -1,3 +1,7 @@
+/**
+ * Dev server for the web app. It binds to 127.0.0.1 only, and forwards /api
+ * requests to the local server on port 8787, so the browser sees one origin.
+ */
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 

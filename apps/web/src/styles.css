@@ -1,3 +1,6 @@
+/* Web app styles. Colours are CSS variables in :root, redefined below for
+   dark mode, so components never hard-code a colour. */
+
 :root {
   color-scheme: light dark;
   --bg: #f6f5f1;

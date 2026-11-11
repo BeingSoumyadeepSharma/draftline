@@ -1,4 +1,12 @@
-import type { FieldDescriptor } from "./types";
+/**
+ * Reads the page. It finds the application form, turns each control into a
+ * FieldDescriptor (label, kind, options, current value, character limit), and
+ * reads the job description.
+ *
+ * Site-specific details live in the ADAPTERS list. Supporting a new site
+ * starts with adding an adapter there.
+ */
+import type { FieldDescriptor, PageJob } from "./types";
 
 export type DetectedField = {
   descriptor: FieldDescriptor;
@@ -206,9 +214,11 @@ export function detectFields(doc: Document, hostname: string): DetectedField[] |
       return;
     }
 
+    const limit = (input as HTMLInputElement).maxLength;
     fields.push({
       descriptor: {
         ...base,
+        ...(limit > 0 && limit < 100_000 ? { maxLength: limit } : {}),
         kind: adapter.isSuggestBox?.(input)
           ? "suggest"
           : input.tagName === "TEXTAREA"
@@ -222,4 +232,137 @@ export function detectFields(doc: Document, hostname: string): DetectedField[] |
   });
 
   return fields;
+}
+
+// --- Reading the job description ---
+const BLOCK_TAGS = new Set([
+  "P", "DIV", "SECTION", "ARTICLE", "UL", "OL", "LI", "BR", "TR",
+  "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE",
+]);
+const SKIPPED_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "SVG", "BUTTON", "FORM", "IFRAME"]);
+
+/** Visible text with line breaks between blocks, so lists stay readable. */
+export function readableText(root: Element): string {
+  const parts: string[] = [];
+  const walk = (node: Node) => {
+    if (node.nodeType === 3) {
+      parts.push(node.textContent ?? "");
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const element = node as Element;
+    if (SKIPPED_TAGS.has(element.tagName)) return;
+    if (element.tagName === "LI") parts.push("\n- ");
+    element.childNodes.forEach(walk);
+    if (BLOCK_TAGS.has(element.tagName)) parts.push("\n");
+  };
+  walk(root);
+  return parts
+    .join("")
+    .replace(/[ \t ]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+const clean = (text: string | null | undefined) =>
+  (text ?? "").replace(/\s+/g, " ").trim();
+
+const FORM_BOILERPLATE = /^(apply for this job|\* ?indicates a required field)$/i;
+
+/**
+ * The text of everything before the form's first field, inside `root`.
+ * MyGreenhouse shows the description above the form in one pop-up, without
+ * the markup the public job board uses.
+ */
+function textBeforeFirstField(root: Element): string {
+  const firstField = root.querySelector(
+    "input:not([type='hidden']):not([aria-hidden='true']), select, textarea",
+  );
+  if (!firstField) return "";
+  const view = root.ownerDocument.defaultView!;
+  const blocks: Element[] = [];
+  const collect = (parent: Element) => {
+    for (const child of parent.children) {
+      if (child.contains(firstField)) {
+        // Descend through containers of the whole form, but stop at the
+        // first field's own wrapper so its label isn't read as description.
+        const fields = child.querySelectorAll(
+          "input:not([type='hidden']):not([aria-hidden='true']), select, textarea",
+        );
+        if (fields.length > 1) collect(child);
+        return;
+      }
+      const precedes =
+        firstField.compareDocumentPosition(child) & view.Node.DOCUMENT_POSITION_PRECEDING;
+      if (!precedes) return;
+      blocks.push(child);
+    }
+  };
+  collect(root);
+  return blocks
+    .map(readableText)
+    .join("\n")
+    .split("\n")
+    .filter((line) => !FORM_BOILERPLATE.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
+/** Greenhouse titles read "Job Application for <role> at <company>". */
+function greenhouseJob(doc: Document, url: string): PageJob | null {
+  const company = / at (.+)$/.exec(clean(doc.title))?.[1] ?? "";
+  const description = doc.querySelector(".job__description");
+  if (description) {
+    return {
+      url,
+      title: clean(doc.querySelector(".job__title h1, h1")?.textContent),
+      company,
+      location: clean(doc.querySelector(".job__location")?.textContent),
+      description: readableText(description),
+    };
+  }
+
+  const firstName = doc.querySelector(
+    "#first_name, input[name='first_name'], input[autocomplete='given-name']",
+  );
+  const popUp = firstName?.closest("[role='dialog'], dialog");
+  const text = textBeforeFirstField(popUp ?? doc.body);
+  // Too little text means this is a heading, not a job description.
+  if (text.length < 200) return null;
+  return {
+    url,
+    title: clean((popUp ?? doc).querySelector("h1, h2")?.textContent),
+    company,
+    location: "",
+    description: text,
+  };
+}
+
+/** Lever titles read "<company> - <role>". */
+function leverJob(doc: Document, url: string): PageJob | null {
+  const sections = [
+    ...doc.querySelectorAll(".section-wrapper.page-full-width .section.page-centered"),
+  ].filter(
+    (section) =>
+      !section.matches(
+        ".posting-header, .last-section-apply, [data-qa='btn-apply-bottom']",
+      ),
+  );
+  if (sections.length === 0) return null;
+  return {
+    url,
+    title: clean(doc.querySelector(".posting-headline h2")?.textContent),
+    company: clean(doc.title.split(" - ")[0]),
+    location: clean(doc.querySelector(".posting-categories .location")?.textContent),
+    description: sections.map(readableText).filter(Boolean).join("\n\n"),
+  };
+}
+
+/** Reads the job from a posting page, or null if this page doesn't show one. */
+export function jobFromDocument(doc: Document, hostname: string, url: string): PageJob | null {
+  const adapter = adapterFor(hostname);
+  if (adapter?.id === "Greenhouse") return greenhouseJob(doc, url);
+  if (adapter?.id === "Lever") return leverJob(doc, url);
+  return null;
 }

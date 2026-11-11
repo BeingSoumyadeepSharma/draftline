@@ -1,9 +1,19 @@
+/**
+ * The Profile tab: resume import, the resume PDF the extension attaches, and an
+ * editor for every part of the profile.
+ *
+ * Edits live in local state until the user clicks Save. An import fills the
+ * editor the same way and isn't saved until then either. `dirty` compares the
+ * editor with the last saved copy to enable Save and Discard.
+ */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Profile, ResumeFileMeta } from "@draftline/shared";
 import { api } from "./api";
 
+/** Applies a change to a copy of the profile being edited. */
 type Update = (change: (draft: Profile) => void) => void;
 
+/** A labelled one-line text input. */
 function Field({
   label,
   value,
@@ -23,6 +33,7 @@ function Field({
   );
 }
 
+/** A labelled multi-line text input. */
 function TextArea({
   label,
   value,
@@ -46,6 +57,7 @@ function TextArea({
   );
 }
 
+/** A card with a heading and an optional add button. */
 function Section({
   title,
   onAdd,
@@ -72,6 +84,7 @@ function Section({
   );
 }
 
+/** One item in a list section (a role, school, ...) with a remove button. */
 function Entry({
   onRemove,
   removeLabel,
@@ -129,6 +142,7 @@ function SkillsInput({
   );
 }
 
+/** The editable form for every profile section. */
 function ProfileEditor({
   profile,
   update,
@@ -380,6 +394,10 @@ function ProfileEditor({
   );
 }
 
+/**
+ * The whole Profile tab. aiVersion changes when AI settings are saved,
+ * so the import card can update.
+ */
 export function ProfilePage({ aiVersion }: { aiVersion: number }) {
   const [saved, setSaved] = useState<Profile | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);

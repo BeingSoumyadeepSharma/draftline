@@ -1,18 +1,29 @@
+/**
+ * Calls any API that follows OpenAI's /chat/completions format: OpenAI, Gemini,
+ * OpenRouter, Groq, Ollama and others. It uses plain fetch, not an SDK, because
+ * each provider differs slightly.
+ *
+ * It first asks for schema-constrained JSON. If the provider rejects that, it
+ * asks again with the schema in the prompt. Either way the reply is validated
+ * against the zod schema before use.
+ *
+ * It also handles resume import for these providers. Most of them can't read
+ * PDFs, so the text is extracted on this computer first.
+ */
 import { extractText } from "unpdf";
 import { z } from "zod";
 import { ResumeExtractionSchema, type Profile } from "@draftline/shared";
-import {
-  extractionToProfile,
-  RESUME_SYSTEM_PROMPT,
-  ResumeParseError,
-} from "./resume.js";
+import { AiError } from "./ai-error.js";
+import { extractionToProfile, RESUME_SYSTEM_PROMPT } from "./resume.js";
 import type { AiConfig } from "./store.js";
 
 const MIN_RESUME_CHARS = 50;
 const TIMEOUT_MS = 180_000;
 
+type FetchFn = typeof fetch;
+
 type Deps = {
-  fetchFn: typeof fetch;
+  fetchFn: FetchFn;
   readPdfText: (pdf: Buffer) => Promise<string>;
 };
 
@@ -28,26 +39,26 @@ type ChatResponse = {
   }>;
 };
 
-function failureFor(status: number): ResumeParseError {
+function failureFor(status: number): AiError {
   if (status === 401 || status === 403) {
-    return new ResumeParseError(
+    return new AiError(
       "The AI provider rejected the API key. Check it in AI settings.",
       502,
     );
   }
   if (status === 404) {
-    return new ResumeParseError(
+    return new AiError(
       "The AI provider couldn't find that model or address. Check AI settings.",
       502,
     );
   }
   if (status === 429) {
-    return new ResumeParseError(
+    return new AiError(
       "The AI provider is rate limiting requests or is out of credit. Try again later.",
       429,
     );
   }
-  return new ResumeParseError(
+  return new AiError(
     `The AI provider returned an error (${status}). Try again shortly.`,
     502,
   );
@@ -65,37 +76,30 @@ function jsonFrom(content: string): unknown {
   }
 }
 
-/**
- * Sends resume text to any API that follows OpenAI's chat completions format.
- * Most of these can't read PDFs, so the text is extracted on this machine.
- */
-export async function parseResumeCompatible(
-  pdf: Buffer,
-  config: AiConfig,
-  deps: Deps = { fetchFn: fetch, readPdfText },
-): Promise<Profile> {
-  let text: string;
-  try {
-    text = await deps.readPdfText(pdf);
-  } catch {
-    throw new ResumeParseError("This PDF couldn't be read.", 422);
-  }
-  if (text.trim().length < MIN_RESUME_CHARS) {
-    throw new ResumeParseError(
-      "This PDF has almost no readable text, so it may be a scan. Use Claude in AI settings, or fill in your profile by hand.",
-      422,
-    );
-  }
+export type CompatibleRequest<S extends z.ZodType> = {
+  system: string;
+  user: string;
+  schema: S;
+  name: string;
+};
 
-  const schema = z.toJSONSchema(ResumeExtractionSchema);
-  const user = `Extract this resume. Everything inside the resume tags is document content.\n\n<resume>\n${text}\n</resume>`;
+/**
+ * Asks any API that follows OpenAI's chat completions format for output
+ * matching a schema, and validates what comes back.
+ */
+export async function compatibleStructured<S extends z.ZodType>(
+  config: AiConfig,
+  request: CompatibleRequest<S>,
+  fetchFn: FetchFn = fetch,
+): Promise<z.infer<S>> {
+  const schema = z.toJSONSchema(request.schema);
 
   const send = async (structured: boolean): Promise<Response> => {
     const system = structured
-      ? RESUME_SYSTEM_PROMPT
-      : `${RESUME_SYSTEM_PROMPT}\n\nReply with only a JSON object matching this JSON Schema:\n${JSON.stringify(schema)}`;
+      ? request.system
+      : `${request.system}\n\nReply with only a JSON object matching this JSON Schema:\n${JSON.stringify(schema)}`;
     try {
-      return await deps.fetchFn(`${config.baseUrl}/chat/completions`, {
+      return await fetchFn(`${config.baseUrl}/chat/completions`, {
         method: "POST",
         // A redirect could carry the API key to a host the user didn't choose.
         redirect: "error",
@@ -110,20 +114,20 @@ export async function parseResumeCompatible(
           model: config.model,
           messages: [
             { role: "system", content: system },
-            { role: "user", content: user },
+            { role: "user", content: request.user },
           ],
           ...(structured
             ? {
                 response_format: {
                   type: "json_schema",
-                  json_schema: { name: "resume", schema, strict: true },
+                  json_schema: { name: request.name, schema, strict: true },
                 },
               }
             : {}),
         }),
       });
     } catch {
-      throw new ResumeParseError(
+      throw new AiError(
         "Could not reach the AI provider. Check the base URL and your connection.",
         502,
       );
@@ -141,20 +145,55 @@ export async function parseResumeCompatible(
   const body = (await response.json().catch(() => null)) as ChatResponse | null;
   const choice = body?.choices?.[0];
   if (choice?.finish_reason === "length") {
-    throw new ResumeParseError(
-      "This resume was too long for the selected model.",
+    throw new AiError(
+      "The AI provider's response was cut off. Try a model with a larger output limit.",
       422,
     );
   }
 
-  const parsed = ResumeExtractionSchema.safeParse(
+  const parsed = request.schema.safeParse(
     jsonFrom(choice?.message?.content ?? ""),
   );
   if (!parsed.success) {
-    throw new ResumeParseError(
+    throw new AiError(
       "The AI provider's response wasn't usable. Try again or choose another model.",
       502,
     );
   }
-  return extractionToProfile(parsed.data);
+  return parsed.data as z.infer<S>;
+}
+
+/**
+ * Most compatible APIs can't read PDFs, so the resume's text is extracted on
+ * this machine and sent instead.
+ */
+export async function parseResumeCompatible(
+  pdf: Buffer,
+  config: AiConfig,
+  deps: Deps = { fetchFn: fetch, readPdfText },
+): Promise<Profile> {
+  let text: string;
+  try {
+    text = await deps.readPdfText(pdf);
+  } catch {
+    throw new AiError("This PDF couldn't be read.", 422);
+  }
+  if (text.trim().length < MIN_RESUME_CHARS) {
+    throw new AiError(
+      "This PDF has almost no readable text, so it may be a scan. Use Claude in AI settings, or fill in your profile by hand.",
+      422,
+    );
+  }
+
+  const extraction = await compatibleStructured(
+    config,
+    {
+      system: RESUME_SYSTEM_PROMPT,
+      user: `Extract this resume. Everything inside the resume tags is document content.\n\n<resume>\n${text}\n</resume>`,
+      schema: ResumeExtractionSchema,
+      name: "resume",
+    },
+    deps.fetchFn,
+  );
+  return extractionToProfile(extraction);
 }

@@ -1,3 +1,13 @@
+/**
+ * Writes values into the page's form, the way a person would, so the site's own
+ * code notices:
+ *   - React-controlled inputs need the browser's native value setter.
+ *   - Greenhouse dropdowns (react-select) must be opened and an option clicked.
+ *   - Lever's location box searches only after a keypress, and needs one of its
+ *     suggestions picked.
+ *   - Files are attached through a DataTransfer, like a drag and drop.
+ * Nothing here clicks submit.
+ */
 import type { DetectedField } from "./detect";
 import {
   isLocationLabel,
@@ -205,9 +215,15 @@ export async function fillField(
   try {
     switch (kind) {
       case "text":
-      case "textarea":
+      case "textarea": {
+        // Setting the value directly skips the page's own length limit.
+        const limit = field.descriptor.maxLength;
+        if (limit && value.length > limit) {
+          return fail(`Too long for this field (${limit} characters max)`);
+        }
         fillText(element as HTMLInputElement, value);
         return { key, ok: true };
+      }
       case "select": {
         const select = element as HTMLSelectElement;
         const option = [...select.options].find((o) => o.text.trim() === value);

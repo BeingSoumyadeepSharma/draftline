@@ -1,3 +1,9 @@
+/**
+ * Entry point of the web app (http://127.0.0.1:5173): a top bar with three tabs.
+ *
+ * All three pages stay mounted and are hidden with the `hidden` attribute,
+ * so switching tabs never loses unsaved edits.
+ */
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AiSettingsPage } from "./AiSettingsPage";

@@ -1,3 +1,6 @@
+/* Side panel styles. Same colour variables as the web app (apps/web/src/styles.css),
+   so both look alike in light and dark mode. */
+
 :root {
   color-scheme: light dark;
   --bg: #f6f5f1;
@@ -179,4 +182,105 @@ label.row {
 .foot p {
   margin: 0;
   font-size: 12px;
+}
+
+button.small {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-head h2 {
+  margin-bottom: 6px;
+}
+
+.job {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.job-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.job-title {
+  font-weight: 600;
+}
+
+.score {
+  flex: none;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+  text-align: right;
+}
+
+.score span {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.verdict {
+  margin: 8px 0 4px;
+}
+
+.job details {
+  font-size: 13px;
+}
+
+.job summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.job h3 {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.job ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.job .ghost {
+  margin: 6px 0 0 -12px;
+}
+
+.row.draft textarea,
+.row.draft select {
+  width: 100%;
+  margin: 4px 0 2px;
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.row-warn {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.row.draft .row-body {
+  flex: 1;
 }

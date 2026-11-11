@@ -1,4 +1,9 @@
 // @vitest-environment jsdom
+/**
+ * Tests against saved copies of real Greenhouse and Lever pages (test/fixtures)
+ * and real react-select components, so reading and filling are checked against
+ * the same markup the live sites use.
+ */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createElement as h, useState, act } from "react";
@@ -7,7 +12,7 @@ import Select from "react-select";
 import AsyncSelect from "react-select/async";
 import { beforeEach, describe, expect, it } from "vitest";
 import { EMPTY_PROFILE } from "@draftline/shared";
-import { detectFields, type DetectedField } from "../src/detect";
+import { detectFields, jobFromDocument, type DetectedField } from "../src/detect";
 import { fillField } from "../src/fill";
 import { matchField, type MatchData } from "../src/match";
 
@@ -394,5 +399,92 @@ describe("filling React-controlled fields", () => {
     expect(result.ok).toBe(false);
     expect(picked).toBe("");
     root.unmount();
+  });
+});
+
+describe("reading the job description", () => {
+  const parse = (name: string) =>
+    new DOMParser().parseFromString(
+      readFileSync(path.join(import.meta.dirname, "fixtures", name), "utf8"),
+      "text/html",
+    );
+
+  it("reads a real Greenhouse posting", () => {
+    const job = jobFromDocument(
+      parse("greenhouse-job.html"),
+      "job-boards.greenhouse.io",
+      "https://job-boards.greenhouse.io/gitlab/jobs/1",
+    )!;
+    expect(job.title).toBe("AI Transformation Owner, CRO");
+    expect(job.company).toBe("GitLab");
+    expect(job.location).toBe("Remote, United States");
+    expect(job.description).toContain("GitLab is the intelligent orchestration platform");
+    expect(job.description).toContain("\n- ");
+    expect(job.description.length).toBeGreaterThan(200);
+  });
+
+  it("reads a real Lever posting without the apply button", () => {
+    const job = jobFromDocument(
+      parse("lever-posting.html"),
+      "jobs.lever.co",
+      "https://jobs.lever.co/palantir/1",
+    )!;
+    expect(job.title).toBe("Administrative Business Partner");
+    expect(job.company).toBe("Palantir Technologies");
+    expect(job.location).toBe("Singapore, Singapore");
+    expect(job.description).toContain("A World-Changing Company");
+    expect(job.description).not.toMatch(/\bApply\s*$/);
+  });
+
+  it("returns nothing on a Lever apply page, which has no description", () => {
+    load("lever.html");
+    expect(jobFromDocument(document, "jobs.lever.co", "https://jobs.lever.co/x/apply")).toBeNull();
+  });
+
+  it("passes on a field's character limit", () => {
+    load("greenhouse.html");
+    const fields = detectFields(document, "job-boards.greenhouse.io")!;
+    expect(byLabel(fields, "First Name").descriptor.maxLength).toBe(255);
+  });
+});
+
+describe("reading a MyGreenhouse pop-up", () => {
+  const description = `
+    <h2>Company Description</h2>
+    <p>Moviri started as a research spinoff at Politecnico of Milan and was incubated at its startup accelerator.</p>
+    <p>Moviri Consulting is the first company of Moviri and its foundation. Its professionals use data, software, and insights to solve business challenges.</p>
+    <h2>What you'll do</h2>
+    <p>As part of our AI Labs team, you'll contribute to projects ranging from traditional Machine Learning to the latest Generative AI applications.</p>`;
+
+  function renderPopUp() {
+    load("greenhouse.html");
+    const form = document.querySelector("form")!;
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.innerHTML = `<div class="content">${description}</div><h2>Apply for this job</h2><p>* indicates a required field</p>`;
+    dialog.append(form);
+    document.body.replaceChildren(dialog);
+  }
+
+  it("reads the description shown above the form", () => {
+    renderPopUp();
+    const job = jobFromDocument(document, "my.greenhouse.io", "https://my.greenhouse.io/jobs/1")!;
+    expect(job).not.toBeNull();
+    expect(job.title).toBe("Company Description");
+    expect(job.description).toContain("research spinoff at Politecnico of Milan");
+    expect(job.description).toContain("Generative AI applications");
+    expect(job.description).not.toContain("Apply for this job");
+    expect(job.description).not.toContain("First Name");
+  });
+
+  it("returns nothing when only a heading sits above the form", () => {
+    load("greenhouse.html");
+    const form = document.querySelector("form")!;
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.innerHTML = "<h2>Apply for this job</h2>";
+    dialog.append(form);
+    document.body.replaceChildren(dialog);
+    expect(jobFromDocument(document, "my.greenhouse.io", "https://my.greenhouse.io/jobs/1")).toBeNull();
   });
 });
