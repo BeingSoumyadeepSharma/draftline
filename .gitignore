@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# Secrets and personal data stay on this machine
+.env
+data/
+
+.claude/worktrees/

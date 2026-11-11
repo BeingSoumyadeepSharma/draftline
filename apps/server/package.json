@@ -1,0 +1,26 @@
+{
+  "name": "@draftline/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@draftline/shared": "workspace:^",
+    "@hono/node-server": "^2.1.6",
+    "better-sqlite3": "^12.9.0",
+    "dotenv": "^18.0.10",
+    "hono": "^4.13.17",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "20",
+    "tsx": "^4.23.15",
+    "vitest": "^3.2.7"
+  }
+}
