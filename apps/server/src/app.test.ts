@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { EMPTY_PROFILE, type Answer, type Profile } from "@draftline/shared";
+import {
+  EMPTY_PROFILE,
+  EXTENSION_ID,
+  type Answer,
+  type Profile,
+} from "@draftline/shared";
 import { createApp } from "./app.js";
 import { extractionToProfile, ResumeParseError } from "./resume.js";
 import { createStore } from "./store.js";
@@ -31,8 +36,77 @@ describe("api", () => {
     app = createApp({
       store,
       parseResume,
-      isAiConfigured: () => aiConfigured,
+      hasEnvClaudeKey: () => aiConfigured,
     });
+  });
+
+  const saveAi = (body: object) =>
+    app.request("/api/settings/ai", {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    });
+  const compatible = {
+    provider: "openai_compatible",
+    baseUrl: "https://api.example.com/v1/",
+    model: "some-model",
+    apiKey: "secret-key",
+  };
+
+  it("never returns a saved API key to the browser", async () => {
+    const res = await saveAi(compatible);
+    const text = await res.text();
+    expect(res.status).toBe(200);
+    expect(text).not.toContain("secret-key");
+    expect(JSON.parse(text)).toMatchObject({ hasApiKey: true, configured: true });
+    expect(store.getAiConfig()?.baseUrl).toBe("https://api.example.com/v1");
+  });
+
+  it("keeps the key when left blank for the same destination", async () => {
+    await saveAi(compatible);
+    await saveAi({ ...compatible, model: "other-model", apiKey: "" });
+    expect(store.getAiConfig()).toMatchObject({
+      model: "other-model",
+      apiKey: "secret-key",
+    });
+  });
+
+  it("drops the key when the destination changes", async () => {
+    await saveAi(compatible);
+    await saveAi({
+      ...compatible,
+      baseUrl: "https://other.example.com/v1",
+      apiKey: "",
+    });
+    expect(store.getAiConfig()?.apiKey).toBe("");
+  });
+
+  it("allows http only for a model on this machine", async () => {
+    const remote = await saveAi({ ...compatible, baseUrl: "http://api.example.com/v1" });
+    expect(remote.status).toBe(400);
+
+    const local = await saveAi({
+      ...compatible,
+      baseUrl: "http://localhost:11434/v1",
+      apiKey: "",
+    });
+    expect(local.status).toBe(200);
+  });
+
+  it("requires a model for compatible APIs", async () => {
+    const res = await saveAi({ ...compatible, model: " " });
+    expect(res.status).toBe(400);
+  });
+
+  it("counts a keyless local provider as configured", async () => {
+    aiConfigured = false;
+    await saveAi({
+      ...compatible,
+      baseUrl: "http://127.0.0.1:11434/v1",
+      apiKey: "",
+    });
+    const res = await app.request("/api/status", { headers: HOST });
+    expect(await res.json()).toEqual({ aiConfigured: true });
   });
 
   it("rejects unknown hosts and cross-site origins", async () => {
@@ -55,6 +129,45 @@ describe("api", () => {
       headers: { ...HOST, origin: "http://127.0.0.1:5173" },
     });
     expect(res.status).toBe(200);
+  });
+
+  it("allows only Draftline's own extension", async () => {
+    const own = await app.request("/api/profile", {
+      headers: { ...HOST, origin: `chrome-extension://${EXTENSION_ID}` },
+    });
+    expect(own.status).toBe(200);
+
+    const other = await app.request("/api/profile", {
+      headers: { ...HOST, origin: "chrome-extension://abcdefghijklmnop" },
+    });
+    expect(other.status).toBe(403);
+  });
+
+  it("stores a resume file and returns it for attaching", async () => {
+    const empty = await app.request("/api/resume/meta", { headers: HOST });
+    expect(await empty.json()).toBeNull();
+
+    const bytes = "%PDF-1.7 fake";
+    const saved = await app.request("/api/resume/file", {
+      method: "PUT",
+      headers: HOST,
+      body: pdfForm(bytes),
+    });
+    expect(saved.status).toBe(200);
+
+    const file = await app.request("/api/resume/file", { headers: HOST });
+    const payload = (await file.json()) as { name: string; base64: string };
+    expect(payload.name).toBe("resume.pdf");
+    expect(Buffer.from(payload.base64, "base64").toString()).toBe(bytes);
+  });
+
+  it("refuses to store a file that is not a PDF", async () => {
+    const res = await app.request("/api/resume/file", {
+      method: "PUT",
+      headers: HOST,
+      body: pdfForm("not a pdf"),
+    });
+    expect(res.status).toBe(400);
   });
 
   it("saves a valid profile and rejects an invalid one", async () => {
@@ -95,7 +208,7 @@ describe("api", () => {
     expect(parseResume).not.toHaveBeenCalled();
   });
 
-  it("explains when no API key is configured", async () => {
+  it("explains when no AI provider is configured", async () => {
     aiConfigured = false;
     const res = await app.request("/api/resume/parse", {
       method: "POST",
@@ -103,7 +216,7 @@ describe("api", () => {
       body: pdfForm(),
     });
     expect(res.status).toBe(503);
-    expect((await res.json()).error).toContain("ANTHROPIC_API_KEY");
+    expect((await res.json()).error).toContain("AI settings");
   });
 
   it("passes import failures through with their status", async () => {

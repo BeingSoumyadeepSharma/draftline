@@ -1,8 +1,11 @@
 import type {
+  AiSettingsInput,
+  AiSettingsView,
   Answer,
   AnswerInput,
   ApiError,
   Profile,
+  ResumeFileMeta,
   ResumeParseResult,
   Status,
 } from "@draftline/shared";
@@ -39,6 +42,15 @@ export const api = {
       method: "POST",
       body,
     });
+  },
+  getAiSettings: () => request<AiSettingsView>("/settings/ai"),
+  saveAiSettings: (input: AiSettingsInput) =>
+    request<AiSettingsView>("/settings/ai", json("PUT", input)),
+  resumeMeta: () => request<ResumeFileMeta | null>("/resume/meta"),
+  uploadResume: (file: File) => {
+    const body = new FormData();
+    body.set("file", file);
+    return request<ResumeFileMeta>("/resume/file", { method: "PUT", body });
   },
   listAnswers: () => request<Answer[]>("/answers"),
   createAnswer: (input: AnswerInput) =>

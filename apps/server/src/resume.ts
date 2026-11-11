@@ -16,7 +16,7 @@ export class ResumeParseError extends Error {
   }
 }
 
-const SYSTEM_PROMPT = `You convert a resume into structured data for the person who wrote it.
+export const RESUME_SYSTEM_PROMPT = `You convert a resume into structured data for the person who wrote it.
 
 The structured data becomes the source of truth for their job applications, so accuracy matters more than completeness:
 - Copy facts as written. Keep each bullet's wording, numbers, and dates.
@@ -49,8 +49,12 @@ export function extractionToProfile(extraction: ResumeExtraction): Profile {
 }
 
 /** Sends the PDF to Claude and returns an unsaved draft profile. */
-export async function parseResumeWithClaude(pdf: Buffer): Promise<Profile> {
-  const client = new Anthropic();
+export async function parseResumeWithClaude(
+  pdf: Buffer,
+  apiKey?: string,
+): Promise<Profile> {
+  // With no saved key, the SDK reads ANTHROPIC_API_KEY from the environment.
+  const client = new Anthropic(apiKey ? { apiKey } : {});
 
   let response;
   try {
@@ -63,7 +67,7 @@ export async function parseResumeWithClaude(pdf: Buffer): Promise<Profile> {
         effort: "medium",
         format: betaZodOutputFormat(ResumeExtractionSchema),
       },
-      system: SYSTEM_PROMPT,
+      system: RESUME_SYSTEM_PROMPT,
       messages: [
         {
           role: "user",
@@ -84,7 +88,7 @@ export async function parseResumeWithClaude(pdf: Buffer): Promise<Profile> {
   } catch (error) {
     if (error instanceof Anthropic.AuthenticationError) {
       throw new ResumeParseError(
-        "Claude rejected the API key. Check ANTHROPIC_API_KEY in .env and restart the app.",
+        "Claude rejected the API key. Check it in AI settings.",
         502,
       );
     }

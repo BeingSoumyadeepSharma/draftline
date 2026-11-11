@@ -1,5 +1,6 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { AiSettingsPage } from "./AiSettingsPage";
 import { AnswersPage } from "./AnswersPage";
 import { ProfilePage } from "./ProfilePage";
 import "./styles.css";
@@ -7,10 +8,12 @@ import "./styles.css";
 const TABS = [
   { id: "profile", label: "Profile" },
   { id: "answers", label: "Saved answers" },
+  { id: "ai", label: "AI settings" },
 ] as const;
 
 function App() {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("profile");
+  const [aiVersion, setAiVersion] = useState(0);
 
   return (
     <div className="shell">
@@ -31,10 +34,13 @@ function App() {
       </header>
       {/* Both pages stay mounted so switching tabs never loses unsaved edits. */}
       <main hidden={tab !== "profile"}>
-        <ProfilePage />
+        <ProfilePage aiVersion={aiVersion} />
       </main>
       <main hidden={tab !== "answers"}>
         <AnswersPage />
+      </main>
+      <main hidden={tab !== "ai"}>
+        <AiSettingsPage onSaved={() => setAiVersion((v) => v + 1)} />
       </main>
     </div>
   );

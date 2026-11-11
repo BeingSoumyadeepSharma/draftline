@@ -135,6 +135,65 @@ export const AnswerInputSchema = z.object({
 export type AnswerInput = z.infer<typeof AnswerInputSchema>;
 export type Answer = AnswerInput & { id: string };
 
+export const AI_PROVIDERS = ["anthropic", "openai_compatible"] as const;
+export type AiProvider = (typeof AI_PROVIDERS)[number];
+
+/** API keys may only travel over HTTPS, unless the model runs on this machine. */
+function isSafeBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:") return true;
+    return (
+      url.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export const AiSettingsInputSchema = z
+  .object({
+    provider: z.enum(AI_PROVIDERS),
+    baseUrl: z.string().trim(),
+    model: z.string().trim(),
+    /** Blank keeps the saved key, as long as the destination hasn't changed. */
+    apiKey: z.string().trim(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.provider !== "openai_compatible") return;
+    if (!isSafeBaseUrl(value.baseUrl)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["baseUrl"],
+        message: "Base URL must use https, or http on localhost",
+      });
+    }
+    if (!value.model) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["model"],
+        message: "Enter a model name",
+      });
+    }
+  });
+export type AiSettingsInput = z.infer<typeof AiSettingsInputSchema>;
+
+/** What the browser may see. The API key itself never leaves the server. */
+export type AiSettingsView = {
+  provider: AiProvider;
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+  configured: boolean;
+};
+
+/** Derived from the public key in apps/extension/manifest.json. */
+export const EXTENSION_ID = "nlonealbggknmcmnccjjbgndhmfnoipm";
+
+export type ResumeFileMeta = { name: string; uploadedAt: string };
+export type ResumeFilePayload = { name: string; base64: string };
+
 export type Status = { aiConfigured: boolean };
 export type ResumeParseResult = { profile: Profile };
 export type ApiError = { error: string };

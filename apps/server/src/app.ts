@@ -1,13 +1,19 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
+  AiSettingsInputSchema,
   AnswerInputSchema,
+  EXTENSION_ID,
   ProfileSchema,
+  type AiSettingsView,
   type ApiError,
   type Profile,
+  type ResumeFileMeta,
+  type ResumeFilePayload,
   type ResumeParseResult,
   type Status,
 } from "@draftline/shared";
+import { aiSettingsView } from "./ai.js";
 import { ResumeParseError } from "./resume.js";
 import type { Store } from "./store.js";
 
@@ -21,15 +27,35 @@ const ALLOWED_HOSTS = new Set([
 const ALLOWED_ORIGINS = new Set([
   "http://127.0.0.1:5173",
   "http://localhost:5173",
+  `chrome-extension://${EXTENSION_ID}`,
 ]);
+
+const resumeBodyLimit = bodyLimit({
+  maxSize: MAX_RESUME_BYTES,
+  onError: (c) => c.json({ error: "Resume must be under 10 MB" }, 413),
+});
+
+async function readPdfUpload(
+  c: Context,
+): Promise<{ name: string; pdf: Buffer } | { error: string }> {
+  const body = await c.req.parseBody().catch(() => null);
+  const file = body?.file;
+  if (!(file instanceof File)) return { error: "Choose a PDF file" };
+  const pdf = Buffer.from(await file.arrayBuffer());
+  if (pdf.subarray(0, 5).toString("latin1") !== "%PDF-") {
+    return { error: "That file isn't a PDF" };
+  }
+  return { name: file.name, pdf };
+}
 
 type Deps = {
   store: Store;
   parseResume: (pdf: Buffer) => Promise<Profile>;
-  isAiConfigured: () => boolean;
+  hasEnvClaudeKey: () => boolean;
 };
 
-export function createApp({ store, parseResume, isAiConfigured }: Deps) {
+export function createApp({ store, parseResume, hasEnvClaudeKey }: Deps) {
+  const aiView = () => aiSettingsView(store, hasEnvClaudeKey());
   const app = new Hono();
   const fail = (error: string): ApiError => ({ error });
 
@@ -49,8 +75,24 @@ export function createApp({ store, parseResume, isAiConfigured }: Deps) {
   });
 
   app.get("/api/status", (c) =>
-    c.json<Status>({ aiConfigured: isAiConfigured() }),
+    c.json<Status>({ aiConfigured: aiView().configured }),
   );
+
+  app.get("/api/settings/ai", (c) => c.json<AiSettingsView>(aiView()));
+
+  app.put("/api/settings/ai", async (c) => {
+    const parsed = AiSettingsInputSchema.safeParse(
+      await c.req.json().catch(() => null),
+    );
+    if (!parsed.success) {
+      return c.json(
+        fail(parsed.error.issues[0]?.message ?? "Invalid settings"),
+        400,
+      );
+    }
+    store.saveAiConfig(parsed.data);
+    return c.json<AiSettingsView>(aiView());
+  });
 
   app.get("/api/profile", (c) => c.json(store.getProfile()));
 
@@ -64,31 +106,17 @@ export function createApp({ store, parseResume, isAiConfigured }: Deps) {
   // Returns a draft only. Nothing is stored until the user reviews and saves.
   app.post(
     "/api/resume/parse",
-    bodyLimit({
-      maxSize: MAX_RESUME_BYTES,
-      onError: (c) => c.json(fail("Resume must be under 10 MB"), 413),
-    }),
+    resumeBodyLimit,
     async (c) => {
-      if (!isAiConfigured()) {
-        return c.json(
-          fail("Add ANTHROPIC_API_KEY to .env and restart the app."),
-          503,
-        );
+      if (!aiView().configured) {
+        return c.json(fail("Set up an AI provider in AI settings first."), 503);
       }
 
-      const body = await c.req.parseBody().catch(() => null);
-      const file = body?.file;
-      if (!(file instanceof File)) {
-        return c.json(fail("Choose a PDF file to import"), 400);
-      }
-
-      const pdf = Buffer.from(await file.arrayBuffer());
-      if (pdf.subarray(0, 5).toString("latin1") !== "%PDF-") {
-        return c.json(fail("That file isn't a PDF"), 400);
-      }
+      const upload = await readPdfUpload(c);
+      if ("error" in upload) return c.json(fail(upload.error), 400);
 
       try {
-        const profile = await parseResume(pdf);
+        const profile = await parseResume(upload.pdf);
         return c.json<ResumeParseResult>({ profile });
       } catch (error) {
         if (error instanceof ResumeParseError) {
@@ -98,6 +126,27 @@ export function createApp({ store, parseResume, isAiConfigured }: Deps) {
       }
     },
   );
+
+  app.get("/api/resume/meta", (c) =>
+    c.json<ResumeFileMeta | null>(store.getResumeMeta()),
+  );
+
+  app.get("/api/resume/file", (c) => {
+    const file = store.getResumeFile();
+    if (!file) return c.json(fail("No resume file saved"), 404);
+    return c.json<ResumeFilePayload>({
+      name: file.name,
+      base64: Buffer.from(file.data).toString("base64"),
+    });
+  });
+
+  app.put("/api/resume/file", resumeBodyLimit, async (c) => {
+    const upload = await readPdfUpload(c);
+    if ("error" in upload) return c.json(fail(upload.error), 400);
+    return c.json<ResumeFileMeta>(
+      store.saveResumeFile(upload.name, upload.pdf),
+    );
+  });
 
   app.get("/api/answers", (c) => c.json(store.listAnswers()));
 

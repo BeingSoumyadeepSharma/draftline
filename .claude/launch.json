@@ -3,8 +3,11 @@
   "configurations": [
     {
       "name": "draftline",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev"],
+      "runtimeExecutable": "/bin/zsh",
+      "runtimeArgs": [
+        "-c",
+        "source \"$HOME/.nvm/nvm.sh\" && nvm use >/dev/null && pnpm dev"
+      ],
       "port": 5173,
       "url": "http://127.0.0.1:5173"
     }

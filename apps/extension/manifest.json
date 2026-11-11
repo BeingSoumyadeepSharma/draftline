@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Draftline",
+  "version": "0.1.0",
+  "description": "Fills job applications from your own saved profile. You review and submit.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsx9VIlv0BJ2/KzDS6vgXeqMYD9uzUBwAbj8wSLIH5EwroUAtZ8uCzMaey4U4cFSSCo/PHcWk5GHBJo3+c2bDvJtsjPYH4k3y3YkrfewiGjxBxfjmPgMdI1N5laKYVob5n3IYVqCBwVc1IB6FB9qKVcWJdtBjY5pmS7ok75PdCprXV8IrBy+Rhd6vT84NV5sTC9ANdtUzcurA/kNDiEKBUu0Mn2jIwVIZTM2Ea1wY9KVTdISWn6CfEAw/shfXl+cHBS8B2KFn/rrB0cckSWVmWHgHmVvdTA6sGNsqkRQGxvb1OvhundExrUzgRFUXtSNRC4E+DJyKfE9zreDm8N0nCQIDAQAB",
+  "action": {
+    "default_title": "Open Draftline"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "permissions": [
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8787/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.greenhouse.io/*",
+        "https://*.lever.co/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}

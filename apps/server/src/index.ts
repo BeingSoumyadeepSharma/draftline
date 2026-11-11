@@ -3,8 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { config } from "dotenv";
+import { createResumeParser } from "./ai.js";
 import { createApp, SERVER_PORT } from "./app.js";
-import { parseResumeWithClaude } from "./resume.js";
 import { createStore } from "./store.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -13,10 +13,12 @@ config({ path: path.join(root, ".env"), quiet: true });
 const dataDir = path.join(root, "data");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
+const store = createStore(path.join(dataDir, "draftline.db"));
+
 const app = createApp({
-  store: createStore(path.join(dataDir, "draftline.db")),
-  parseResume: parseResumeWithClaude,
-  isAiConfigured: () =>
+  store,
+  parseResume: createResumeParser(store),
+  hasEnvClaudeKey: () =>
     Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
 });
 

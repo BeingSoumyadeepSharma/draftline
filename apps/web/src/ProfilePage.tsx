@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Profile } from "@draftline/shared";
+import type { Profile, ResumeFileMeta } from "@draftline/shared";
 import { api } from "./api";
 
 type Update = (change: (draft: Profile) => void) => void;
@@ -380,11 +380,13 @@ function ProfileEditor({
   );
 }
 
-export function ProfilePage() {
+export function ProfilePage({ aiVersion }: { aiVersion: number }) {
   const [saved, setSaved] = useState<Profile | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [aiConfigured, setAiConfigured] = useState(false);
-  const [importedFrom, setImportedFrom] = useState<string | null>(null);
+  const [importedFile, setImportedFile] = useState<File | null>(null);
+  const [resumeMeta, setResumeMeta] = useState<ResumeFileMeta | null>(null);
+  const attachInput = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
@@ -394,14 +396,23 @@ export function ProfilePage() {
   const dirty = JSON.stringify(profile) !== JSON.stringify(saved);
 
   useEffect(() => {
-    Promise.all([api.getProfile(), api.status()])
-      .then(([loaded, status]) => {
+    Promise.all([api.getProfile(), api.status(), api.resumeMeta()])
+      .then(([loaded, status, meta]) => {
         setSaved(loaded);
         setProfile(loaded);
         setAiConfigured(status.aiConfigured);
+        setResumeMeta(meta);
       })
       .catch((e: Error) => setError(e.message));
   }, []);
+
+  useEffect(() => {
+    if (aiVersion === 0) return;
+    api
+      .status()
+      .then((status) => setAiConfigured(status.aiConfigured))
+      .catch((e: Error) => setError(e.message));
+  }, [aiVersion]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -427,7 +438,7 @@ export function ProfilePage() {
     try {
       const result = await api.parseResume(file);
       setProfile(result.profile);
-      setImportedFrom(file.name);
+      setImportedFile(file);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -444,7 +455,8 @@ export function ProfilePage() {
       const result = await api.saveProfile(profile);
       setSaved(result);
       setProfile(result);
-      setImportedFrom(null);
+      if (importedFile) setResumeMeta(await api.uploadResume(importedFile));
+      setImportedFile(null);
       setJustSaved(true);
     } catch (e) {
       setError((e as Error).message);
@@ -455,8 +467,19 @@ export function ProfilePage() {
 
   function discard() {
     setProfile(saved);
-    setImportedFrom(null);
+    setImportedFile(null);
     setJustSaved(false);
+  }
+
+  async function replaceResume(file: File) {
+    setError(null);
+    try {
+      setResumeMeta(await api.uploadResume(file));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      if (attachInput.current) attachInput.current.value = "";
+    }
   }
 
   return (
@@ -488,8 +511,8 @@ export function ProfilePage() {
           <h2>Import your resume</h2>
           <p className="muted">
             {aiConfigured
-              ? "Claude reads your PDF and fills in the form below. Nothing is saved until you review it."
-              : "To import a PDF, add ANTHROPIC_API_KEY to the .env file and restart the app. You can still fill this in by hand."}
+              ? "Your AI provider reads your PDF and fills in the form below. Nothing is saved until you review it."
+              : "To import a PDF, set up a provider in AI settings. You can still fill this in by hand."}
           </p>
         </div>
         <input
@@ -511,14 +534,38 @@ export function ProfilePage() {
         </button>
       </section>
 
+      <section className="card import">
+        <div>
+          <h2>Resume to attach</h2>
+          <p className="muted">
+            {resumeMeta
+              ? `The extension attaches ${resumeMeta.name} to applications.`
+              : "The extension attaches this PDF to applications. None saved yet."}
+          </p>
+        </div>
+        <input
+          ref={attachInput}
+          type="file"
+          accept="application/pdf,.pdf"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) void replaceResume(file);
+          }}
+        />
+        <button className="ghost" onClick={() => attachInput.current?.click()}>
+          {resumeMeta ? "Replace PDF" : "Upload PDF"}
+        </button>
+      </section>
+
       {error && (
         <p className="banner error" role="alert">
           {error}
         </p>
       )}
-      {importedFrom && (
+      {importedFile && (
         <p className="banner" role="status">
-          Imported from {importedFrom}. Check every section, then save.
+          Imported from {importedFile.name}. Check every section, then save.
         </p>
       )}
 
