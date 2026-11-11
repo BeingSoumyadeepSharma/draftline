@@ -252,7 +252,7 @@ export type JobRecord = {
   location: string;
   analysis: JobAnalysis | null;
   analyzedAt: string | null;
-};
+} & Tracking;
 
 export const QuestionInputSchema = z.object({
   key: z.string().min(1).max(500),
@@ -358,7 +358,7 @@ export type JobListItem = {
   resumeStatus: "draft" | "approved" | null;
   coverLetterStatus: "draft" | "approved" | null;
   updatedAt: string;
-};
+} & Tracking;
 
 /** What the model returns when tailoring a resume, before checks. */
 export const TailoredResumeOutputSchema = z.object({
@@ -376,3 +376,61 @@ export const CoverLetterOutputSchema = z.object({
   sourceIds: z.array(z.string()),
   note: z.string(),
 });
+
+// --- Application tracking (Phase 6) ---
+
+export const APPLICATION_STATUSES = [
+  "saved",
+  "applied",
+  "interviewing",
+  "offer",
+  "rejected",
+  "withdrawn",
+] as const;
+export const ApplicationStatusSchema = z.enum(APPLICATION_STATUSES);
+export type ApplicationStatus = z.infer<typeof ApplicationStatusSchema>;
+
+export const APPLICATION_STATUS_LABELS: Record<ApplicationStatus, string> = {
+  saved: "Saved",
+  applied: "Applied",
+  interviewing: "Interviewing",
+  offer: "Offer",
+  rejected: "Rejected",
+  withdrawn: "Withdrawn",
+};
+
+/** Statuses that still need a nudge, so their follow-up dates count. */
+export const ACTIVE_STATUSES: readonly ApplicationStatus[] = ["applied", "interviewing"];
+
+/** A date with no time, like "2026-11-18". */
+const DateOnlySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date like 2026-11-18");
+
+/** Changes from the tracker. Leaving a field out keeps it as it is. */
+export const TrackingUpdateSchema = z.object({
+  status: ApplicationStatusSchema.optional(),
+  followUpAt: DateOnlySchema.nullable().optional(),
+  notes: z.string().max(10_000).optional(),
+});
+export type TrackingUpdate = z.infer<typeof TrackingUpdateSchema>;
+
+/** Sent when the user marks a job applied, or the extension sees it happen. */
+export const MarkAppliedSchema = z.object({
+  url: z
+    .string()
+    .max(2000)
+    .refine((url) => /^https?:\/\//.test(url), "Invalid job URL"),
+  title: z.string().max(300).default(""),
+  company: z.string().max(300).default(""),
+  source: z.enum(["detected", "manual"]),
+});
+export type MarkApplied = z.infer<typeof MarkAppliedSchema>;
+
+export type Tracking = {
+  status: ApplicationStatus;
+  appliedAt: string | null;
+  followUpAt: string | null;
+  notes: string;
+};
+
+/** One line in a job's timeline. */
+export type JobEvent = { at: string; text: string };

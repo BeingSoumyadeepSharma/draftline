@@ -8,6 +8,7 @@
  *   /api/resume/*                   resume import (AI) and the stored PDF
  *   /api/jobs/*                     job fit analysis and answer drafts (AI),
  *                                   and tailored resume / cover letter PDFs
+ *   /api/jobs/:id/tracking, ...     application status, follow-ups, timeline
  *   /api/answers                    saved answers to common questions
  *
  * createApp receives its dependencies (database, AI service) as arguments, so
@@ -21,15 +22,18 @@ import {
   DocumentKindSchema,
   DraftRequestSchema,
   JobInputSchema,
+  MarkAppliedSchema,
   AnswerInputSchema,
   EXTENSION_ID,
   ProfileSchema,
   type AiSettingsView,
   type ApiError,
   TailoredResumeSchema,
+  TrackingUpdateSchema,
   type AnswerDraft,
   type DocumentKind,
   type JobDocuments,
+  type JobEvent,
   type JobListItem,
   type JobRecord,
   type ResumeFileMeta,
@@ -190,6 +194,10 @@ export function createApp({ store, ai, hasEnvClaudeKey }: Deps) {
     location: row.location,
     analysis: row.analysis ? JSON.parse(row.analysis) : null,
     analyzedAt: row.analyzedAt,
+    status: row.status,
+    appliedAt: row.appliedAt,
+    followUpAt: row.followUpAt,
+    notes: row.notes,
   });
 
   const jsonBodyLimit = bodyLimit({
@@ -215,13 +223,13 @@ export function createApp({ store, ai, hasEnvClaudeKey }: Deps) {
     if (!parsed.success) {
       return c.json(fail("Draftline couldn't read enough of the job description."), 400);
     }
-    if (!aiView().configured) {
-      return c.json(fail("Set up an AI provider in AI settings first."), 503);
-    }
     const row = store.upsertJob(parsed.data);
-    // Drafting answers needs the job saved, but not a fit check.
+    // Saving a job (for tracking, drafts and documents) needs no AI.
     if (c.req.query("save_only") === "1") {
       return c.json<JobRecord>(toRecord(row));
+    }
+    if (!aiView().configured) {
+      return c.json(fail("Set up an AI provider in AI settings first."), 503);
     }
     if (row.analysis && c.req.query("refresh") !== "1") {
       return c.json<JobRecord>(toRecord(row));
@@ -384,6 +392,34 @@ export function createApp({ store, ai, hasEnvClaudeKey }: Deps) {
       base64: Buffer.from(file.data).toString("base64"),
     });
   });
+
+  // --- Application tracking (Phase 6) ---
+
+  // Status, follow-up date and notes, from the tracker or the side panel.
+  app.patch("/api/jobs/:id/tracking", jsonBodyLimit, async (c) => {
+    const parsed = TrackingUpdateSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json(fail(parsed.error.issues[0]?.message ?? "Invalid change"), 400);
+    }
+    const row = store.updateTracking(c.req.param("id"), parsed.data);
+    return row ? c.json<JobRecord>(toRecord(row)) : c.json(fail("Job not found"), 404);
+  });
+
+  // Called by the "Mark as applied" button, and by the extension when it sees
+  // a site's confirmation page after the user submitted.
+  app.post("/api/jobs/applied", jsonBodyLimit, async (c) => {
+    const parsed = MarkAppliedSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json(fail("Invalid job"), 400);
+    return c.json<JobRecord>(toRecord(store.markApplied(parsed.data)));
+  });
+
+  app.get("/api/jobs/:id/events", (c) => {
+    if (!store.getJob(c.req.param("id"))) return c.json(fail("Job not found"), 404);
+    return c.json<JobEvent[]>(store.listEvents(c.req.param("id")));
+  });
+
+  // How many follow-ups are due today or overdue, for the extension's badge.
+  app.get("/api/tracker/due", (c) => c.json({ count: store.countDueFollowUps() }));
 
   // --- Saved answers: list, add, edit, delete ---
   app.get("/api/answers", (c) => c.json(store.listAnswers()));

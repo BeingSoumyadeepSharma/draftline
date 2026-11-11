@@ -23,6 +23,7 @@ import type {
   ResumeFilePayload,
   Status,
 } from "@draftline/shared";
+import { APPLICATION_STATUS_LABELS } from "@draftline/shared";
 import { isSensitiveQuestion } from "@draftline/shared/questions";
 import {
   COVER_LETTER_VALUE,
@@ -190,6 +191,37 @@ function JobCard({
   );
 }
 
+const shortDate = (iso: string) =>
+  new Date(iso.length === 10 ? `${iso}T00:00:00` : iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+
+/** Where this application stands in the tracker, with a manual "applied" button. */
+function TrackingLine({
+  record,
+  marking,
+  onMarkApplied,
+}: {
+  record: JobRecord;
+  marking: boolean;
+  onMarkApplied: () => void;
+}) {
+  const parts = [APPLICATION_STATUS_LABELS[record.status]];
+  if (record.appliedAt) parts.push(`applied ${shortDate(record.appliedAt)}`);
+  if (record.followUpAt) parts.push(`follow up ${shortDate(record.followUpAt)}`);
+  return (
+    <div className="tracking-line">
+      <span className="row-note">Tracker: {parts.join(" · ")}</span>
+      {record.status === "saved" && (
+        <button className="ghost small" disabled={marking} onClick={onMarkApplied}>
+          {marking ? "Saving…" : "Mark as applied"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Status of this job's tailored resume and cover letter, with next steps. */
 function DocumentsCard({
   documents,
@@ -315,6 +347,7 @@ function App() {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [documents, setDocuments] = useState<JobDocuments | null>(null);
   const [creatingDocs, setCreatingDocs] = useState(false);
+  const [marking, setMarking] = useState(false);
   const jobUrl = useRef<string | null>(null);
 
   const scan = useCallback(async () => {
@@ -348,10 +381,12 @@ function App() {
     const url = page.job?.url ?? null;
     let record: JobRecord | null = null;
     let docs: JobDocuments | null = null;
-    if (url) {
-      record = await getJson<JobRecord | null>(
-        `/jobs/lookup?url=${encodeURIComponent(url)}`,
-      ).catch(() => null);
+    if (page.job && url) {
+      // Saving the job here is what logs it in the tracker. A short or
+      // unreadable description can't be saved, so fall back to a lookup.
+      record = await postJson<JobRecord>("/jobs/analyze?save_only=1", page.job).catch(() =>
+        getJson<JobRecord | null>(`/jobs/lookup?url=${encodeURIComponent(url)}`).catch(() => null),
+      );
       if (record) {
         docs = await getJson<JobDocuments>(`/jobs/${record.id}/documents`).catch(() => null);
       }
@@ -455,6 +490,28 @@ function App() {
       setError((e as Error).message);
     } finally {
       setCreatingDocs(false);
+    }
+  }
+
+  /** For when the site's confirmation page wasn't recognized, or applying elsewhere. */
+  async function markApplied() {
+    if (!jobRecord) return;
+    setMarking(true);
+    setError(null);
+    try {
+      setJobRecord(
+        await postJson<JobRecord>("/jobs/applied", {
+          url: jobRecord.url,
+          title: jobRecord.title,
+          company: jobRecord.company,
+          source: "manual",
+        }),
+      );
+      void chrome.runtime.sendMessage({ type: "refresh-badge" }).catch(() => {});
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setMarking(false);
     }
   }
 
@@ -636,6 +693,10 @@ function App() {
           Draftline couldn't read the job description on this page, so AI
           features are off here.
         </p>
+      )}
+
+      {jobRecord && (
+        <TrackingLine record={jobRecord} marking={marking} onMarkApplied={() => void markApplied()} />
       )}
 
       {view.job && (aiReady || documents?.resume || documents?.coverLetter) && (

@@ -6,8 +6,10 @@
  *   profile      one row: the whole profile as JSON
  *   answers      saved answers to common application questions
  *   resume_file  one row: the PDF the extension attaches
- *   jobs         jobs the user has opened, with any saved AI fit analysis
+ *   jobs         jobs the user has opened, with any saved AI fit analysis and
+ *                their tracking: status, applied date, follow-up date, notes
  *   documents    tailored resume and cover letter per job, with approved PDFs
+ *   job_events   each job's timeline: status changes, submissions, follow-ups
  *   ai_settings  one row: the chosen AI provider, address, model and key
  *
  * Single-row tables use id = 1. node:sqlite returns plain records, so results
@@ -22,12 +24,18 @@ import {
   type AiSettingsInput,
   type Answer,
   type AnswerCategory,
+  ACTIVE_STATUSES,
+  APPLICATION_STATUS_LABELS,
   type CoverLetter,
   type DocumentKind,
   type JobAnalysis,
   type JobDocuments,
   type JobInput,
+  type JobEvent,
   type JobListItem,
+  type MarkApplied,
+  type Tracking,
+  type TrackingUpdate,
   type Source,
   type TailoredResume,
   type AnswerInput,
@@ -66,10 +74,24 @@ export type JobRow = {
   description: string;
   analysis: string | null;
   analyzedAt: string | null;
-};
+} & Tracking;
 
-const JOB_COLUMNS =
-  "id, url, title, company, location, description, analysis, analyzed_at AS analyzedAt";
+const JOB_COLUMNS = `id, url, title, company, location, description, analysis,
+  analyzed_at AS analyzedAt, status, applied_at AS appliedAt,
+  follow_up_at AS followUpAt, notes`;
+
+/** Today as "YYYY-MM-DD" (UTC). */
+export const today = (now = new Date()) => now.toISOString().slice(0, 10);
+
+/** A "YYYY-MM-DD" date moved by some days. */
+export function addDays(date: string, days: number): string {
+  const moved = new Date(`${date}T00:00:00Z`);
+  moved.setUTCDate(moved.getUTCDate() + days);
+  return today(moved);
+}
+
+/** Days after applying before a follow-up is due, unless the user changes it. */
+const FOLLOW_UP_DAYS = 7;
 
 export type Store = ReturnType<typeof createStore>;
 
@@ -128,6 +150,37 @@ export function createStore(path: string) {
       api_key TEXT NOT NULL
     );
   `);
+
+  // Databases created before Phase 6 have a jobs table without tracking
+  // columns. Adding them keeps every saved job and document.
+  const jobColumns = new Set(
+    (db.prepare("PRAGMA table_info(jobs)").all() as unknown as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  for (const [name, definition] of [
+    ["status", "TEXT NOT NULL DEFAULT 'saved'"],
+    ["applied_at", "TEXT"],
+    ["follow_up_at", "TEXT"],
+    ["notes", "TEXT NOT NULL DEFAULT ''"],
+  ] as const) {
+    if (!jobColumns.has(name)) db.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${definition}`);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS job_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL,
+      at TEXT NOT NULL,
+      text TEXT NOT NULL
+    );
+  `);
+
+  const logEvent = (jobId: string, text: string) =>
+    db.prepare("INSERT INTO job_events (job_id, at, text) VALUES (?, ?, ?)").run(
+      jobId,
+      new Date().toISOString(),
+      text,
+    );
 
   const readAiConfig = (): AiConfig | null => {
     const row = db
@@ -280,6 +333,7 @@ export function createStore(path: string) {
       const rows = db
         .prepare(
           `SELECT j.id, j.url, j.title, j.company, j.analysis, j.updated_at AS updatedAt,
+             j.status, j.applied_at AS appliedAt, j.follow_up_at AS followUpAt, j.notes,
              r.status AS resumeStatus, c.status AS coverLetterStatus
            FROM jobs j
            LEFT JOIN documents r ON r.job_id = j.id AND r.kind = 'resume'
@@ -291,6 +345,87 @@ export function createStore(path: string) {
         ...row,
         score: analysis ? (JSON.parse(analysis) as JobAnalysis).score : null,
       }));
+    },
+
+    /**
+     * Applies tracker changes and records them in the job's timeline.
+     * Moving to Applied stamps the date and sets a follow-up a week out;
+     * moving to a final status clears the follow-up. An explicit followUpAt
+     * in the same change always wins.
+     */
+    updateTracking(id: string, change: TrackingUpdate): JobRow | null {
+      const row = this.getJob(id);
+      if (!row) return null;
+      let { status, appliedAt, followUpAt, notes } = row;
+
+      if (change.status && change.status !== status) {
+        logEvent(
+          id,
+          `Status changed from ${APPLICATION_STATUS_LABELS[status]} to ${APPLICATION_STATUS_LABELS[change.status]}`,
+        );
+        status = change.status;
+        if (status === "applied" && !appliedAt) appliedAt = new Date().toISOString();
+        if (change.followUpAt === undefined) {
+          if (ACTIVE_STATUSES.includes(status) && !followUpAt) {
+            followUpAt = addDays(today(), FOLLOW_UP_DAYS);
+          }
+          if (!ACTIVE_STATUSES.includes(status) && status !== "saved") followUpAt = null;
+        }
+      }
+      if (change.followUpAt !== undefined && change.followUpAt !== followUpAt) {
+        followUpAt = change.followUpAt;
+        logEvent(id, followUpAt ? `Follow-up set for ${followUpAt}` : "Follow-up cleared");
+      }
+      if (change.notes !== undefined) notes = change.notes;
+
+      db.prepare(
+        `UPDATE jobs SET status = ?, applied_at = ?, follow_up_at = ?, notes = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(status, appliedAt, followUpAt, notes, new Date().toISOString(), id);
+      return this.getJob(id);
+    },
+
+    /**
+     * Marks a job applied, creating it first if Draftline never saw its
+     * description. Jobs already past Applied (an interview, say) keep their
+     * status; the timeline still notes the submission.
+     */
+    markApplied(input: MarkApplied): JobRow {
+      let row = this.findJobByUrl(input.url);
+      if (!row) {
+        const now = new Date().toISOString();
+        db.prepare(
+          `INSERT INTO jobs (id, url, title, company, location, description, created_at, updated_at)
+           VALUES (?, ?, ?, ?, '', '', ?, ?)`,
+        ).run(randomUUID(), input.url, input.title, input.company, now, now);
+        row = this.findJobByUrl(input.url)!;
+      }
+      logEvent(
+        row.id,
+        input.source === "detected"
+          ? "Submission detected on the site's confirmation page"
+          : "Marked as applied",
+      );
+      if (row.status === "saved") return this.updateTracking(row.id, { status: "applied" })!;
+      return row;
+    },
+
+    listEvents(jobId: string): JobEvent[] {
+      return db
+        .prepare("SELECT at, text FROM job_events WHERE job_id = ? ORDER BY id DESC")
+        .all(jobId) as unknown as JobEvent[];
+    },
+
+    /** Active applications whose follow-up date has arrived. */
+    countDueFollowUps(onDate = today()): number {
+      const placeholders = ACTIVE_STATUSES.map(() => "?").join(", ");
+      const row = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM jobs
+           WHERE follow_up_at IS NOT NULL AND follow_up_at <= ? AND status IN (${placeholders})`,
+        )
+        .get(onDate, ...ACTIVE_STATUSES) as unknown as { n: number };
+      return row.n;
     },
 
     getDocuments(jobId: string): JobDocuments {

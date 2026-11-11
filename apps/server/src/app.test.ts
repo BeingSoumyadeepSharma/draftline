@@ -199,6 +199,15 @@ describe("api", () => {
     aiConfigured = false;
     expect((await analyze()).status).toBe(503);
     expect(generate).not.toHaveBeenCalled();
+
+    // Saving the job for tracking needs no AI provider.
+    const saved = await app.request("/api/jobs/analyze?save_only=1", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(job),
+    });
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).status).toBe("saved");
   });
 
   it("passes AI failures through with their status", async () => {

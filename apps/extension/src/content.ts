@@ -20,6 +20,7 @@ import {
   workdayJobApiUrl,
 } from "./detect";
 import { fillField } from "./fill";
+import { checkForConfirmation, isSubmitControl, rememberSubmission } from "./submission";
 import type {
   ContentMessage,
   FillResponse,
@@ -86,6 +87,30 @@ async function readJob(): Promise<PageJob | null> {
   }
 }
 
+// --- Noticing submissions (Phase 6) ---
+
+// The job on this page, kept ready so a submit click can record it at once,
+// before the site navigates away.
+let currentJob: PageJob | null = null;
+const refreshCurrentJob = () => {
+  if (detectFields(document, location.hostname)) {
+    void readJob().then((job) => (currentJob = job ?? currentJob));
+  }
+};
+refreshCurrentJob();
+
+const onPossibleSubmit = (target: EventTarget | null) => {
+  if (!(target instanceof Element) || !detectFields(document, location.hostname)) return;
+  if (isSubmitControl(target)) void rememberSubmission(currentJob, location.href);
+};
+document.addEventListener("click", (event) => onPossibleSubmit(event.target), true);
+document.addEventListener("submit", (event) => onPossibleSubmit(event.submitter ?? null), true);
+
+// A confirmation can be a new page or the same page changing; check both.
+const checkConfirmation = () =>
+  void checkForConfirmation(document.body?.innerText ?? "", location.hostname);
+checkConfirmation();
+
 /**
  * Multi-step forms (Workday, LinkedIn) swap fields without loading a new
  * page. When the set of fields changes, tell the side panel to rescan.
@@ -95,6 +120,8 @@ let changeTimer: ReturnType<typeof setTimeout> | undefined;
 new MutationObserver(() => {
   clearTimeout(changeTimer);
   changeTimer = setTimeout(() => {
+    checkConfirmation();
+    refreshCurrentJob();
     const keys = (detectFields(document, location.hostname) ?? [])
       .map((field) => field.descriptor.key)
       .join("|");

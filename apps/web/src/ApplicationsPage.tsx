@@ -1,6 +1,10 @@
 /**
- * The Applications tab: every job opened with the extension, and for each one
- * a tailored resume and cover letter to review and approve.
+ * The Applications tab: every job opened with the extension. It is the
+ * tracker (status, follow-up date, notes, timeline per job) and the place to
+ * review and approve each job's tailored resume and cover letter.
+ *
+ * Jobs arrive here automatically: the side panel saves each job it reads, and
+ * the extension marks a job Applied when it sees the site's confirmation page.
  *
  * Flow per document: "Create with AI" makes a draft, the user edits it here,
  * "Preview PDF" opens the PDF in a new tab, and "Approve" stores the PDF.
@@ -11,6 +15,14 @@
  * them, but the wording always comes from your profile.
  */
 import { useCallback, useEffect, useState } from "react";
+import {
+  ACTIVE_STATUSES,
+  APPLICATION_STATUS_LABELS,
+  APPLICATION_STATUSES,
+  type ApplicationStatus,
+  type JobEvent,
+  type TrackingUpdate,
+} from "@draftline/shared";
 import type {
   CoverLetterDocument,
   DocumentKind,
@@ -335,6 +347,99 @@ function CoverLetterEditor({
   );
 }
 
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/** True when an active application's follow-up date has arrived. */
+const isDue = (job: { status: ApplicationStatus; followUpAt: string | null }) =>
+  ACTIVE_STATUSES.includes(job.status) && job.followUpAt !== null && job.followUpAt <= todayIso();
+
+const formatDate = (iso: string) =>
+  new Date(iso.length === 10 ? `${iso}T00:00:00` : iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+
+/** Status, follow-up date, notes and the job's timeline. */
+function TrackingCard({
+  job,
+  events,
+  onChange,
+}: {
+  job: JobRecord;
+  events: JobEvent[];
+  onChange: (change: TrackingUpdate) => void;
+}) {
+  const [notes, setNotes] = useState(job.notes);
+  useEffect(() => setNotes(job.notes), [job.notes]);
+
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2>Tracking</h2>
+        {isDue(job) && <span className="pill due">Follow-up due</span>}
+      </div>
+      <div className="grid">
+        <label className="field">
+          <span>Status</span>
+          <select
+            value={job.status}
+            onChange={(e) => onChange({ status: e.target.value as ApplicationStatus })}
+          >
+            {APPLICATION_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {APPLICATION_STATUS_LABELS[status]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Follow up on</span>
+          <span className="date-row">
+            <input
+              type="date"
+              value={job.followUpAt ?? ""}
+              onChange={(e) => onChange({ followUpAt: e.target.value || null })}
+            />
+            {job.followUpAt && (
+              <button className="ghost small" onClick={() => onChange({ followUpAt: null })}>
+                Clear
+              </button>
+            )}
+          </span>
+        </label>
+        <p className="muted note wide">
+          {job.appliedAt ? `Applied on ${formatDate(job.appliedAt)}.` : "Not applied yet."}{" "}
+          Marking a job Applied sets a follow-up a week later.
+        </p>
+        <label className="field wide">
+          <span>Notes, such as who you spoke to. Saved when you leave the box.</span>
+          <textarea
+            rows={3}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            onBlur={() => notes !== job.notes && onChange({ notes })}
+          />
+        </label>
+      </div>
+      {events.length > 0 && (
+        <>
+          <h3 className="doc-heading">Timeline</h3>
+          <ul className="timeline">
+            {events.map((event, i) => (
+              <li key={i}>
+                <span className="muted small-text">{formatDate(event.at)}</span> {event.text}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+type Filter = "all" | "due" | ApplicationStatus;
+
 /** Shown before a document exists: explains it and offers the AI draft. */
 function CreateCard({
   title,
@@ -379,6 +484,8 @@ export function ApplicationsPage({
   const [job, setJob] = useState<JobRecord | null>(null);
   const [documents, setDocuments] = useState<JobDocuments | null>(null);
   const [creating, setCreating] = useState<DocumentKind | null>(null);
+  const [events, setEvents] = useState<JobEvent[]>([]);
+  const [filter, setFilter] = useState<Filter>("all");
   const [error, setError] = useState<string | null>(null);
 
   // Reload whenever the tab is shown: the profile or jobs may have changed
@@ -402,10 +509,11 @@ export function ApplicationsPage({
     setDocuments(null);
     setError(null);
     if (!jobId || !active) return;
-    Promise.all([api.getJob(jobId), api.getDocuments(jobId)])
-      .then(([record, docs]) => {
+    Promise.all([api.getJob(jobId), api.getDocuments(jobId), api.listEvents(jobId)])
+      .then(([record, docs, timeline]) => {
         setJob(record);
         setDocuments(docs);
+        setEvents(timeline);
       })
       .catch((e: Error) => setError(e.message));
   }, [jobId, active]);
@@ -413,6 +521,18 @@ export function ApplicationsPage({
   function updated(docs: JobDocuments) {
     setDocuments(docs);
     loadList();
+  }
+
+  async function track(change: TrackingUpdate) {
+    if (!jobId) return;
+    setError(null);
+    try {
+      setJob(await api.updateTracking(jobId, change));
+      setEvents(await api.listEvents(jobId));
+      loadList();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   async function create(kind: DocumentKind) {
@@ -437,8 +557,8 @@ export function ApplicationsPage({
         <div>
           <h1>Applications</h1>
           <p className="muted">
-            Jobs you've opened with the Draftline extension, with a resume and
-            cover letter tailored to each.
+            Every job you've opened with the Draftline extension: where each
+            application stands, when to follow up, and its tailored documents.
           </p>
         </div>
       </div>
@@ -459,9 +579,42 @@ export function ApplicationsPage({
       )}
 
       {jobs && jobs.length > 0 && (
+        <div className="filters" role="group" aria-label="Show">
+          {(["all", "due", ...APPLICATION_STATUSES] as Filter[]).map((option) => {
+            const count =
+              option === "all"
+                ? jobs.length
+                : option === "due"
+                  ? jobs.filter(isDue).length
+                  : jobs.filter((j) => j.status === option).length;
+            if (count === 0 && option !== "all" && option !== filter) return null;
+            return (
+              <button
+                key={option}
+                className={option === "due" ? "chip due" : "chip"}
+                aria-pressed={filter === option}
+                onClick={() => setFilter(option)}
+              >
+                {option === "all"
+                  ? "All"
+                  : option === "due"
+                    ? "Follow-up due"
+                    : APPLICATION_STATUS_LABELS[option]}{" "}
+                {count}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {jobs && jobs.length > 0 && (
         <div className="apps-layout">
           <nav className="job-list" aria-label="Jobs">
-            {jobs.map((item) => (
+            {jobs
+              .filter((item) =>
+                filter === "all" ? true : filter === "due" ? isDue(item) : item.status === filter,
+              )
+              .map((item) => (
               <a
                 key={item.id}
                 href={`#/applications/${item.id}`}
@@ -469,6 +622,12 @@ export function ApplicationsPage({
                 aria-current={item.id === jobId ? "page" : undefined}
               >
                 <span className="job-item-title">{item.title || "Untitled job"}</span>
+                <span className="small-text">
+                  <span className={`status status-${item.status}`}>
+                    {APPLICATION_STATUS_LABELS[item.status]}
+                  </span>
+                  {isDue(item) && <span className="due-text"> · follow up</span>}
+                </span>
                 <span className="muted small-text">
                   {[item.company, item.score !== null ? `fit ${item.score}` : ""]
                     .filter(Boolean)
@@ -502,6 +661,8 @@ export function ApplicationsPage({
                     Open the job posting
                   </a>
                 </section>
+
+                <TrackingCard job={job} events={events} onChange={(change) => void track(change)} />
 
                 {documents.resume ? (
                   <ResumeEditor

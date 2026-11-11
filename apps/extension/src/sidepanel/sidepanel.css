@@ -295,3 +295,11 @@ button.small {
   gap: 4px;
   margin: 4px 0 0 -8px;
 }
+
+.tracking-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}

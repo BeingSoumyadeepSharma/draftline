@@ -12,6 +12,7 @@ import type {
   CoverLetter,
   DocumentKind,
   JobDocuments,
+  JobEvent,
   JobListItem,
   JobRecord,
   Profile,
@@ -19,6 +20,7 @@ import type {
   ResumeParseResult,
   Status,
   TailoredResume,
+  TrackingUpdate,
 } from "@draftline/shared";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -56,6 +58,9 @@ export const api = {
     request<JobDocuments>(`/jobs/${id}/documents/cover_letter`, json("PUT", { content })),
   approveDocument: (id: string, kind: DocumentKind) =>
     request<JobDocuments>(`/jobs/${id}/documents/${kind}/approve`, { method: "POST" }),
+  updateTracking: (id: string, change: TrackingUpdate) =>
+    request<JobRecord>(`/jobs/${id}/tracking`, json("PATCH", change)),
+  listEvents: (id: string) => request<JobEvent[]>(`/jobs/${id}/events`),
   /** Opened in a new tab; the time stops the browser showing an old copy. */
   previewUrl: (id: string, kind: DocumentKind) =>
     `/api/jobs/${id}/documents/${kind}/preview?t=${Date.now()}`,
