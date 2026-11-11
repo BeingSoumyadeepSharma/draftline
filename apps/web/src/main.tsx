@@ -1,5 +1,5 @@
 /**
- * Entry point of the web app (http://127.0.0.1:5173): a top bar with four tabs.
+ * Entry point of the web app (http://127.0.0.1:5173): a top bar with five tabs.
  *
  * All pages stay mounted and are hidden with the `hidden` attribute, so
  * switching tabs never loses unsaved edits.
@@ -12,12 +12,14 @@ import { createRoot } from "react-dom/client";
 import { AiSettingsPage } from "./AiSettingsPage";
 import { AnswersPage } from "./AnswersPage";
 import { ApplicationsPage } from "./ApplicationsPage";
+import { DiscoverPage } from "./DiscoverPage";
 import { ProfilePage } from "./ProfilePage";
 import "./styles.css";
 
 const TABS = [
   { id: "profile", label: "Profile" },
   { id: "answers", label: "Saved answers" },
+  { id: "discover", label: "Discover" },
   { id: "applications", label: "Applications" },
   { id: "ai", label: "AI settings" },
 ] as const;
@@ -68,6 +70,9 @@ function App() {
       </main>
       <main hidden={tab !== "answers"}>
         <AnswersPage />
+      </main>
+      <main hidden={tab !== "discover"}>
+        <DiscoverPage active={tab === "discover"} />
       </main>
       <main hidden={tab !== "applications"}>
         <ApplicationsPage

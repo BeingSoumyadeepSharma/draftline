@@ -492,3 +492,46 @@ button.small {
 .timeline li {
   margin: 3px 0;
 }
+
+/* --- Discover tab --- */
+
+.add-board {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+.board-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.shortlist-title {
+  margin: 24px 0 10px;
+  font-size: 18px;
+}
+
+.found-job h2 a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.found-job h2 a:hover {
+  text-decoration: underline;
+}
+
+.new-pill {
+  margin-left: 8px;
+  vertical-align: middle;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+a.ghost {
+  padding: 7px 12px;
+  text-decoration: none;
+}

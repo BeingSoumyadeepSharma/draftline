@@ -434,3 +434,72 @@ export type Tracking = {
 
 /** One line in a job's timeline. */
 export type JobEvent = { at: string; text: string };
+
+// --- Job discovery (Phase 7) ---
+
+export const BOARD_KINDS = ["greenhouse", "lever", "ashby"] as const;
+export type BoardKind = (typeof BOARD_KINDS)[number];
+
+/** A company job board Draftline checks for new jobs. */
+export type DiscoverySource = {
+  id: string;
+  kind: BoardKind;
+  slug: string;
+  /** The company's name, from the board when it gives one. */
+  label: string;
+  url: string;
+  lastFetchedAt: string | null;
+  lastError: string | null;
+  jobCount: number;
+};
+
+const termList = z.array(z.string().trim().min(1).max(100)).max(30);
+
+/** What to keep from each board. Empty lists don't filter anything. */
+export const DiscoveryPreferencesSchema = z.object({
+  /** At least one must appear in the job title. */
+  keywords: termList,
+  /** None may appear in the job title. */
+  exclude: termList,
+  /** At least one must appear in the job's location. */
+  locations: termList,
+  /** Whether to ask the AI to score the most promising new jobs. */
+  useAi: z.boolean(),
+});
+export type DiscoveryPreferences = z.infer<typeof DiscoveryPreferencesSchema>;
+
+export const AddSourceSchema = z.object({ url: z.string().trim().min(1).max(500) });
+
+export type DiscoveredJob = {
+  id: string;
+  sourceId: string;
+  url: string;
+  title: string;
+  company: string;
+  location: string;
+  postedAt: string | null;
+  firstSeenAt: string;
+  /** 0-100 from how many profile skills the posting mentions. No AI. */
+  ruleScore: number;
+  matchedSkills: string[];
+  /** 0-100 AI fit estimate, for the jobs it was asked to rank. */
+  aiScore: number | null;
+  aiReason: string;
+  status: "new" | "saved" | "dismissed";
+  /** The tracker's job, once saved to Applications. */
+  jobId: string | null;
+};
+
+export type DiscoveryState = {
+  preferences: DiscoveryPreferences;
+  sources: DiscoverySource[];
+  jobs: DiscoveredJob[];
+  lastRunAt: string | null;
+  lastRunSummary: string;
+  running: boolean;
+};
+
+/** What the model returns when ranking several jobs at once, before checks. */
+export const AiRankingOutputSchema = z.object({
+  scores: z.array(z.object({ id: z.string(), score: z.number(), reason: z.string() })),
+});

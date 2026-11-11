@@ -1,6 +1,6 @@
 # Draftline
 
-A job application assistant that runs on your own machine. It keeps your profile and saved answers, fills job applications on Greenhouse, Lever, Ashby, Workday and LinkedIn Easy Apply from them, and can use AI to check your fit for a job and draft answers to open questions. You review everything and submit applications yourself.
+A job application assistant that runs on your own machine. It keeps your profile and saved answers, fills job applications on Greenhouse, Lever, Ashby, Workday and LinkedIn Easy Apply from them, can use AI to check your fit, draft answers and tailor your resume and cover letter, tracks every application with follow-up reminders, and finds new jobs on the company job boards you choose. You review everything and submit applications yourself.
 
 ## Run it
 
@@ -44,6 +44,7 @@ Chrome extension (apps/extension)          Local server (apps/server, port 8787)
 
 - Rule-based filling (`apps/extension/src/match.ts`) runs without AI.
 - AI calls always go through the local server, which holds the API key.
+- Job discovery (`apps/server/src/discovery.ts`) reads public Greenhouse, Lever and Ashby job board APIs once a day while the server runs.
 - Types and schemas shared by all three parts live in `packages/shared`.
 
 Each source file starts with a comment explaining its job; start with

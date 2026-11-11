@@ -9,6 +9,7 @@
  *   /api/jobs/*                     job fit analysis and answer drafts (AI),
  *                                   and tailored resume / cover letter PDFs
  *   /api/jobs/:id/tracking, ...     application status, follow-ups, timeline
+ *   /api/discovery/*                job boards to watch and the ranked shortlist
  *   /api/answers                    saved answers to common questions
  *
  * createApp receives its dependencies (database, AI service) as arguments, so
@@ -17,8 +18,10 @@
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
+  AddSourceSchema,
   AiSettingsInputSchema,
   CoverLetterSchema,
+  DiscoveryPreferencesSchema,
   DocumentKindSchema,
   DraftRequestSchema,
   JobInputSchema,
@@ -31,6 +34,7 @@ import {
   TailoredResumeSchema,
   TrackingUpdateSchema,
   type AnswerDraft,
+  type DiscoveryState,
   type DocumentKind,
   type JobDocuments,
   type JobEvent,
@@ -43,6 +47,8 @@ import {
 } from "@draftline/shared";
 import { aiSettingsView, type AiService } from "./ai.js";
 import { AiError } from "./ai-error.js";
+import { fetchBoard, parseBoardUrl } from "./boards.js";
+import { discoveryDeps, isDiscoveryRunning, runDiscovery } from "./discovery.js";
 import { cleanTailoredResume, draftCoverLetter, tailorResume } from "./documents.js";
 import { analyzeJob, buildFacts, draftAnswers } from "./jobs.js";
 import { documentFileName, renderCoverLetter, renderResume } from "./pdf.js";
@@ -83,9 +89,11 @@ type Deps = {
   store: Store;
   ai: AiService;
   hasEnvClaudeKey: () => boolean;
+  /** For tests: replaces the network when reading job boards. */
+  fetchBoards?: typeof fetch;
 };
 
-export function createApp({ store, ai, hasEnvClaudeKey }: Deps) {
+export function createApp({ store, ai, hasEnvClaudeKey, fetchBoards }: Deps) {
   const aiView = () => aiSettingsView(store, hasEnvClaudeKey());
   const app = new Hono();
   const fail = (error: string): ApiError => ({ error });
@@ -420,6 +428,84 @@ export function createApp({ store, ai, hasEnvClaudeKey }: Deps) {
 
   // How many follow-ups are due today or overdue, for the extension's badge.
   app.get("/api/tracker/due", (c) => c.json({ count: store.countDueFollowUps() }));
+
+  // --- Job discovery (Phase 7) ---
+
+  const discoveryState = (): DiscoveryState => {
+    const run = store.getDiscoveryRun();
+    return {
+      preferences: store.getDiscoveryPreferences(),
+      sources: store.listSources(),
+      jobs: store.listDiscovered(),
+      lastRunAt: run.lastRunAt,
+      lastRunSummary: run.lastSummary,
+      running: isDiscoveryRunning(),
+    };
+  };
+  const refresh = () =>
+    runDiscovery(store, discoveryDeps(store, ai, hasEnvClaudeKey, fetchBoards));
+
+  app.get("/api/discovery", (c) => c.json<DiscoveryState>(discoveryState()));
+
+  app.put("/api/discovery/preferences", jsonBodyLimit, async (c) => {
+    const parsed = DiscoveryPreferencesSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json(fail("Invalid preferences"), 400);
+    store.saveDiscoveryPreferences(parsed.data);
+    return c.json<DiscoveryState>(discoveryState());
+  });
+
+  // Adds a company's job board after checking that it can be read, then
+  // refreshes so its jobs appear straight away.
+  app.post("/api/discovery/sources", jsonBodyLimit, async (c) => {
+    const parsed = AddSourceSchema.safeParse(await c.req.json().catch(() => null));
+    const board = parsed.success ? parseBoardUrl(parsed.data.url) : null;
+    if (!board) {
+      return c.json(
+        fail("Paste a Greenhouse, Lever or Ashby job board address, like jobs.lever.co/company."),
+        400,
+      );
+    }
+    try {
+      await fetchBoard(board, fetchBoards);
+    } catch (error) {
+      return c.json(fail((error as Error).message), 400);
+    }
+    store.addSource(board.kind, board.slug, board.url);
+    await refresh();
+    return c.json<DiscoveryState>(discoveryState());
+  });
+
+  app.delete("/api/discovery/sources/:id", (c) =>
+    store.removeSource(c.req.param("id"))
+      ? c.json<DiscoveryState>(discoveryState())
+      : c.json(fail("Board not found"), 404),
+  );
+
+  app.post("/api/discovery/refresh", async (c) => {
+    await refresh();
+    return c.json<DiscoveryState>(discoveryState());
+  });
+
+  // Copies a posting into Applications, where the tracker and extension use it.
+  app.post("/api/discovery/jobs/:id/save", (c) => {
+    const found = store.getDiscovered(c.req.param("id"));
+    if (!found) return c.json(fail("Job not found"), 404);
+    const job = store.upsertJob({
+      url: found.url,
+      title: found.title,
+      company: found.company,
+      location: found.location,
+      description: found.description,
+    });
+    store.setDiscoveredStatus(found.id, "saved", job.id);
+    return c.json({ jobId: job.id, state: discoveryState() });
+  });
+
+  app.post("/api/discovery/jobs/:id/dismiss", (c) => {
+    if (!store.getDiscovered(c.req.param("id"))) return c.json(fail("Job not found"), 404);
+    store.setDiscoveredStatus(c.req.param("id"), "dismissed");
+    return c.json<DiscoveryState>(discoveryState());
+  });
 
   // --- Saved answers: list, add, edit, delete ---
   app.get("/api/answers", (c) => c.json(store.listAnswers()));

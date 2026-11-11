@@ -10,6 +10,7 @@
  *                their tracking: status, applied date, follow-up date, notes
  *   documents    tailored resume and cover letter per job, with approved PDFs
  *   job_events   each job's timeline: status changes, submissions, follow-ups
+ *   discovery_*  job boards to check and the postings found (discovery-store.ts)
  *   ai_settings  one row: the chosen AI provider, address, model and key
  *
  * Single-row tables use id = 1. node:sqlite returns plain records, so results
@@ -17,6 +18,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { createDiscoveryStore } from "./discovery-store.js";
 import {
   EMPTY_PROFILE,
   ProfileSchema,
@@ -211,6 +213,9 @@ export function createStore(path: string) {
   }
 
   return {
+    // Job discovery tables and queries live in discovery-store.ts.
+    ...createDiscoveryStore(db),
+
     /** The saved profile, or an empty one before the first save. */
     getProfile(): Profile {
       const row = db.prepare("SELECT data FROM profile WHERE id = 1").get() as unknown as

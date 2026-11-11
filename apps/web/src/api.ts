@@ -10,6 +10,8 @@ import type {
   AnswerInput,
   ApiError,
   CoverLetter,
+  DiscoveryPreferences,
+  DiscoveryState,
   DocumentKind,
   JobDocuments,
   JobEvent,
@@ -45,6 +47,20 @@ const json = (method: string, body: unknown): RequestInit => ({
 
 export const api = {
   status: () => request<Status>("/status"),
+
+  // Job discovery (Discover tab)
+  discovery: () => request<DiscoveryState>("/discovery"),
+  saveDiscoveryPreferences: (preferences: DiscoveryPreferences) =>
+    request<DiscoveryState>("/discovery/preferences", json("PUT", preferences)),
+  addDiscoverySource: (url: string) =>
+    request<DiscoveryState>("/discovery/sources", json("POST", { url })),
+  removeDiscoverySource: (id: string) =>
+    request<DiscoveryState>(`/discovery/sources/${id}`, { method: "DELETE" }),
+  refreshDiscovery: () => request<DiscoveryState>("/discovery/refresh", { method: "POST" }),
+  saveDiscoveredJob: (id: string) =>
+    request<{ jobId: string; state: DiscoveryState }>(`/discovery/jobs/${id}/save`, { method: "POST" }),
+  dismissDiscoveredJob: (id: string) =>
+    request<DiscoveryState>(`/discovery/jobs/${id}/dismiss`, { method: "POST" }),
 
   // Jobs and their tailored documents (Applications tab)
   listJobs: () => request<JobListItem[]>("/jobs"),
