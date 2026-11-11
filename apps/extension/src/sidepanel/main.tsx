@@ -15,6 +15,7 @@ import type {
   Answer,
   AnswerDraft,
   ApiError,
+  JobDocuments,
   JobRecord,
   Profile,
   QuestionInput,
@@ -23,7 +24,12 @@ import type {
   Status,
 } from "@draftline/shared";
 import { isSensitiveQuestion } from "@draftline/shared/questions";
-import { matchField, RESUME_VALUE, type Decision } from "../match";
+import {
+  COVER_LETTER_VALUE,
+  matchField,
+  RESUME_VALUE,
+  type Decision,
+} from "../match";
 import type {
   ContentMessage,
   FieldDescriptor,
@@ -35,6 +41,7 @@ import type {
 import "./sidepanel.css";
 
 const API = "http://127.0.0.1:8787/api";
+const WEB_APP = "http://127.0.0.1:5173";
 
 type Row = { field: FieldDescriptor; decision: Decision };
 type View =
@@ -183,6 +190,49 @@ function JobCard({
   );
 }
 
+/** Status of this job's tailored resume and cover letter, with next steps. */
+function DocumentsCard({
+  documents,
+  aiReady,
+  creating,
+  onCreate,
+  onReview,
+}: {
+  documents: JobDocuments | null;
+  aiReady: boolean;
+  creating: boolean;
+  onCreate: () => void;
+  onReview: () => void;
+}) {
+  const describe = (doc: { status: "draft" | "approved" } | null | undefined) =>
+    !doc
+      ? "Not created yet"
+      : doc.status === "approved"
+        ? "Approved. Will be attached."
+        : "Draft. Approve it in Draftline to attach it.";
+  const missing = !documents?.resume || !documents?.coverLetter;
+  const exists = Boolean(documents?.resume || documents?.coverLetter);
+  return (
+    <section className="job docs">
+      <div className="job-title">Documents for this job</div>
+      <p className="row-note">Resume: {describe(documents?.resume)}</p>
+      <p className="row-note">Cover letter: {describe(documents?.coverLetter)}</p>
+      <div className="docs-actions">
+        {aiReady && missing && (
+          <button className="ghost small" disabled={creating} onClick={onCreate}>
+            {creating ? "Writing…" : exists ? "Create the other with AI" : "Create both with AI"}
+          </button>
+        )}
+        {exists && (
+          <button className="ghost small" onClick={onReview}>
+            Review and approve
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 /**
  * One AI draft: editable, unticked until the user chooses it, with its
  * sources and any warnings. Can't be ticked while empty or over the limit.
@@ -263,6 +313,8 @@ function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [documents, setDocuments] = useState<JobDocuments | null>(null);
+  const [creatingDocs, setCreatingDocs] = useState(false);
   const jobUrl = useRef<string | null>(null);
 
   const scan = useCallback(async () => {
@@ -291,9 +343,28 @@ function App() {
     }
     const page = reply.data;
 
+    // The saved job and its documents decide which files get attached, so
+    // they're loaded before matching.
+    const url = page.job?.url ?? null;
+    let record: JobRecord | null = null;
+    let docs: JobDocuments | null = null;
+    if (url) {
+      record = await getJson<JobRecord | null>(
+        `/jobs/lookup?url=${encodeURIComponent(url)}`,
+      ).catch(() => null);
+      if (record) {
+        docs = await getJson<JobDocuments>(`/jobs/${record.id}/documents`).catch(() => null);
+      }
+    }
+    const tailored = {
+      resume: docs?.resume?.status === "approved" ? "Tailored resume (approved)" : null,
+      coverLetter:
+        docs?.coverLetter?.status === "approved" ? "Tailored cover letter (approved)" : null,
+    };
+
     const rows = page.fields.map((field) => ({
       field,
-      decision: matchField(field, data),
+      decision: matchField(field, { ...data, tailored }),
     }));
     setView({ state: "ready", site: page.site, rows, job: page.job });
     setSelected(
@@ -304,20 +375,13 @@ function App() {
       ),
     );
 
-    // Drafts and analysis belong to one job; keep them across rescans of it.
-    const url = page.job?.url ?? null;
+    // Answer drafts belong to one job; keep them across rescans of it.
     if (url !== jobUrl.current) {
       jobUrl.current = url;
       setDrafts({});
-      setJobRecord(null);
-      if (url) {
-        getJson<JobRecord | null>(`/jobs/lookup?url=${encodeURIComponent(url)}`)
-          .then((record) => {
-            if (jobUrl.current === url) setJobRecord(record);
-          })
-          .catch(() => {});
-      }
     }
+    setJobRecord(record);
+    setDocuments(docs);
   }, []);
 
   useEffect(() => {
@@ -349,6 +413,44 @@ function App() {
       setError((e as Error).message);
     } finally {
       setAnalyzing(false);
+    }
+  }
+
+  /** The saved job for this page, saving it first (no AI) if needed. */
+  async function ensureJob(): Promise<JobRecord | null> {
+    if (jobRecord) return jobRecord;
+    if (view.state !== "ready" || !view.job) return null;
+    const record = await postJson<JobRecord>("/jobs/analyze?save_only=1", view.job);
+    setJobRecord(record);
+    return record;
+  }
+
+  /** Asks the AI for whichever of the two documents doesn't exist yet. */
+  async function createDocuments() {
+    setCreatingDocs(true);
+    setError(null);
+    try {
+      const record = await ensureJob();
+      if (!record) return;
+      let docs = documents;
+      if (!docs?.resume) {
+        docs = await postJson<JobDocuments>(`/jobs/${record.id}/documents/resume/generate`, {});
+      }
+      if (!docs?.coverLetter) {
+        docs = await postJson<JobDocuments>(`/jobs/${record.id}/documents/cover_letter/generate`, {});
+      }
+      setDocuments(docs);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCreatingDocs(false);
+    }
+  }
+
+  /** Opens this job's documents in the Draftline web app to edit and approve. */
+  function openReview() {
+    if (jobRecord) {
+      void chrome.tabs.create({ url: `${WEB_APP}/#/applications/${jobRecord.id}` });
     }
   }
 
@@ -401,13 +503,25 @@ function App() {
           ? [{ key: field.key, value: decision.value }]
           : [];
       });
-      const resume = fields.some((f) => f.value === RESUME_VALUE)
-        ? await getJson<ResumeFilePayload>("/resume/file")
-        : null;
+      // Fetch only the files this fill needs: the approved tailored resume
+      // for this job if there is one, otherwise the default resume.
+      const files: Record<string, ResumeFilePayload> = {};
+      const uses = (value: string) => fields.some((f) => f.value === value);
+      if (uses(RESUME_VALUE)) {
+        files[RESUME_VALUE] =
+          jobRecord && documents?.resume?.status === "approved"
+            ? await getJson<ResumeFilePayload>(`/jobs/${jobRecord.id}/documents/resume/file`)
+            : await getJson<ResumeFilePayload>("/resume/file");
+      }
+      if (uses(COVER_LETTER_VALUE) && jobRecord) {
+        files[COVER_LETTER_VALUE] = await getJson<ResumeFilePayload>(
+          `/jobs/${jobRecord.id}/documents/cover_letter/file`,
+        );
+      }
       const reply = await sendToPage<FillResponse>({
         type: "fill",
         fields,
-        resume,
+        files,
       });
       if (reply.kind !== "ok") {
         throw new Error("Lost contact with the page. Reload it.");
@@ -510,6 +624,16 @@ function App() {
           Draftline couldn't read the job description on this page, so AI
           features are off here.
         </p>
+      )}
+
+      {view.job && (aiReady || documents?.resume || documents?.coverLetter) && (
+        <DocumentsCard
+          documents={documents}
+          aiReady={aiReady}
+          creating={creatingDocs}
+          onCreate={() => void createDocuments()}
+          onReview={openReview}
+        />
       )}
 
       {results && (

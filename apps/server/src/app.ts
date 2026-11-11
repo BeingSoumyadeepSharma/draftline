@@ -6,7 +6,8 @@
  *   /api/status, /api/settings/ai   whether AI is set up, and its settings
  *   /api/profile                    the profile, as one JSON document
  *   /api/resume/*                   resume import (AI) and the stored PDF
- *   /api/jobs/*                     job fit analysis and answer drafts (AI)
+ *   /api/jobs/*                     job fit analysis and answer drafts (AI),
+ *                                   and tailored resume / cover letter PDFs
  *   /api/answers                    saved answers to common questions
  *
  * createApp receives its dependencies (database, AI service) as arguments, so
@@ -16,6 +17,8 @@ import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
   AiSettingsInputSchema,
+  CoverLetterSchema,
+  DocumentKindSchema,
   DraftRequestSchema,
   JobInputSchema,
   AnswerInputSchema,
@@ -23,7 +26,11 @@ import {
   ProfileSchema,
   type AiSettingsView,
   type ApiError,
+  TailoredResumeSchema,
   type AnswerDraft,
+  type DocumentKind,
+  type JobDocuments,
+  type JobListItem,
   type JobRecord,
   type ResumeFileMeta,
   type ResumeFilePayload,
@@ -32,7 +39,9 @@ import {
 } from "@draftline/shared";
 import { aiSettingsView, type AiService } from "./ai.js";
 import { AiError } from "./ai-error.js";
+import { cleanTailoredResume, draftCoverLetter, tailorResume } from "./documents.js";
 import { analyzeJob, buildFacts, draftAnswers } from "./jobs.js";
+import { documentFileName, renderCoverLetter, renderResume } from "./pdf.js";
 import type { JobRow, Store } from "./store.js";
 
 export const SERVER_PORT = 8787;
@@ -252,6 +261,128 @@ export function createApp({ store, ai, hasEnvClaudeKey }: Deps) {
     } catch (error) {
       return aiFailure(c, error);
     }
+  });
+
+  // --- Tailored documents (Phase 4) ---
+  // Flow: generate a draft with AI, let the user edit and preview it, then
+  // approve it, which stores the PDF the extension attaches for this job.
+
+  app.get("/api/jobs", (c) => c.json<JobListItem[]>(store.listJobs()));
+
+  app.get("/api/jobs/:id", (c) => {
+    const row = store.getJob(c.req.param("id"));
+    return row ? c.json<JobRecord>(toRecord(row)) : c.json(fail("Job not found"), 404);
+  });
+
+  app.get("/api/jobs/:id/documents", (c) => {
+    if (!store.getJob(c.req.param("id"))) return c.json(fail("Job not found"), 404);
+    return c.json<JobDocuments>(store.getDocuments(c.req.param("id")));
+  });
+
+  /** Reads :id and :kind; `error` is the response to send when either is wrong. */
+  type DocumentTarget =
+    | { error: Response }
+    | { error: null; row: JobRow; kind: DocumentKind };
+  const documentTarget = (c: Context): DocumentTarget => {
+    const row = store.getJob(c.req.param("id") ?? "");
+    const kind = DocumentKindSchema.safeParse(c.req.param("kind"));
+    if (!row) return { error: c.json(fail("Job not found"), 404) };
+    if (!kind.success) return { error: c.json(fail("Unknown document type"), 400) };
+    return { error: null, row, kind: kind.data };
+  };
+
+  // Builds the PDF from the current draft and the current profile.
+  const renderDocument = async (row: JobRow, kind: DocumentKind) => {
+    const profile = store.getProfile();
+    const documents = store.getDocuments(row.id);
+    if (kind === "resume") {
+      if (!documents.resume) return null;
+      return {
+        pdf: await renderResume(profile, cleanTailoredResume(profile, documents.resume.content)),
+        fileName: documentFileName(profile.contact.fullName, "Resume", row.company),
+      };
+    }
+    if (!documents.coverLetter) return null;
+    return {
+      pdf: await renderCoverLetter(profile, row.company, documents.coverLetter.content),
+      fileName: documentFileName(profile.contact.fullName, "Cover letter", row.company),
+    };
+  };
+
+  // Asks the AI for a new draft, replacing any earlier draft or approval.
+  app.post("/api/jobs/:id/documents/:kind/generate", async (c) => {
+    const target = documentTarget(c);
+    if (target.error) return target.error;
+    if (!aiView().configured) {
+      return c.json(fail("Set up an AI provider in AI settings first."), 503);
+    }
+    const profile = store.getProfile();
+    const facts = buildFacts(profile, store.listAnswers());
+    try {
+      const draft =
+        target.kind === "resume"
+          ? await tailorResume(ai.generate, facts, profile, target.row)
+          : await draftCoverLetter(ai.generate, facts, target.row);
+      store.saveDocumentDraft(target.row.id, target.kind, draft);
+      return c.json<JobDocuments>(store.getDocuments(target.row.id));
+    } catch (error) {
+      return aiFailure(c, error);
+    }
+  });
+
+  // Saves the user's edits to a draft.
+  app.put("/api/jobs/:id/documents/:kind", jsonBodyLimit, async (c) => {
+    const target = documentTarget(c);
+    if (target.error) return target.error;
+    const body = (await c.req.json().catch(() => null)) as { content?: unknown } | null;
+    let content;
+    if (target.kind === "resume") {
+      const parsed = TailoredResumeSchema.safeParse(body?.content);
+      if (!parsed.success) return c.json(fail("Invalid resume"), 400);
+      content = cleanTailoredResume(store.getProfile(), parsed.data);
+    } else {
+      const parsed = CoverLetterSchema.safeParse(body?.content);
+      if (!parsed.success) return c.json(fail("Invalid cover letter"), 400);
+      content = parsed.data;
+    }
+    if (!store.updateDocumentContent(target.row.id, target.kind, content)) {
+      return c.json(fail("Create this document first"), 404);
+    }
+    return c.json<JobDocuments>(store.getDocuments(target.row.id));
+  });
+
+  // Shows the current draft as a PDF, without approving it.
+  app.get("/api/jobs/:id/documents/:kind/preview", async (c) => {
+    const target = documentTarget(c);
+    if (target.error) return target.error;
+    const rendered = await renderDocument(target.row, target.kind);
+    if (!rendered) return c.json(fail("Create this document first"), 404);
+    return c.body(new Uint8Array(rendered.pdf), 200, {
+      "content-type": "application/pdf",
+      "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(rendered.fileName)}`,
+    });
+  });
+
+  // Approving stores the PDF; the extension attaches it to this job's form.
+  app.post("/api/jobs/:id/documents/:kind/approve", async (c) => {
+    const target = documentTarget(c);
+    if (target.error) return target.error;
+    const rendered = await renderDocument(target.row, target.kind);
+    if (!rendered) return c.json(fail("Create this document first"), 404);
+    store.approveDocument(target.row.id, target.kind, rendered.fileName, rendered.pdf);
+    return c.json<JobDocuments>(store.getDocuments(target.row.id));
+  });
+
+  // The approved PDF, for the extension to attach.
+  app.get("/api/jobs/:id/documents/:kind/file", (c) => {
+    const target = documentTarget(c);
+    if (target.error) return target.error;
+    const file = store.getApprovedFile(target.row.id, target.kind);
+    if (!file) return c.json(fail("This document isn't approved yet"), 404);
+    return c.json<ResumeFilePayload>({
+      name: file.name,
+      base64: Buffer.from(file.data).toString("base64"),
+    });
   });
 
   // --- Saved answers: list, add, edit, delete ---

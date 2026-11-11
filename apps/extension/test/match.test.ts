@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { EMPTY_PROFILE, type Answer, type Profile } from "@draftline/shared";
 import {
+  COVER_LETTER_VALUE,
   matchField,
   pickLocation,
   pickOption,
@@ -226,5 +227,31 @@ describe("isSensitiveQuestion", () => {
     for (const label of ["Why do you want to join?", "Years of experience with Python", "Portfolio URL"]) {
       expect(isSensitiveQuestion(label), label).toBe(false);
     }
+  });
+});
+
+describe("tailored documents", () => {
+  const withTailored = {
+    ...data,
+    tailored: { resume: "Tailored resume (approved)", coverLetter: "Tailored cover letter (approved)" },
+  };
+
+  it("attaches an approved tailored resume over the default one", () => {
+    expect(matchField(field("Resume/CV", { kind: "file" }), withTailored)).toMatchObject({
+      status: "ready",
+      value: RESUME_VALUE,
+      source: "Tailored resume (approved)",
+    });
+  });
+
+  it("attaches an approved cover letter, and waits for one otherwise", () => {
+    expect(matchField(field("Cover Letter", { kind: "file" }), withTailored)).toMatchObject({
+      status: "ready",
+      value: COVER_LETTER_VALUE,
+    });
+    expect(matchField(field("Cover Letter", { kind: "file" }), data)).toMatchObject({
+      status: "needs_you",
+      reason: expect.stringContaining("cover letter"),
+    });
   });
 });

@@ -305,3 +305,74 @@ export const AnswerDraftOutputSchema = z.object({
     }),
   ),
 });
+
+// --- Tailored documents (Phase 4) ---
+
+export const DOCUMENT_KINDS = ["resume", "cover_letter"] as const;
+export const DocumentKindSchema = z.enum(DOCUMENT_KINDS);
+export type DocumentKind = z.infer<typeof DocumentKindSchema>;
+
+/**
+ * A tailored resume is a selection from the profile, stored as ids, never as
+ * copied text: which roles, which of their bullets in what order, which
+ * projects and skills, plus a summary written for this job. The PDF is built
+ * from the profile's own wording, so nothing in it can be invented.
+ */
+export const TailoredResumeSchema = z.object({
+  summary: z.string().max(3000),
+  roles: z
+    .array(z.object({ roleId: z.string(), bulletIds: z.array(z.string()).max(50) }))
+    .max(50),
+  projectIds: z.array(z.string()).max(50),
+  skills: z.array(z.string().max(200)).max(200),
+});
+export type TailoredResume = z.infer<typeof TailoredResumeSchema>;
+
+/** A cover letter body: paragraphs separated by blank lines. */
+export const CoverLetterSchema = z.object({ body: z.string().max(12_000) });
+export type CoverLetter = z.infer<typeof CoverLetterSchema>;
+
+type DocumentState = {
+  /** Approved documents have a stored PDF the extension can attach. */
+  status: "draft" | "approved";
+  /** Profile facts the AI said it used, for the summary or letter. */
+  sources: Source[];
+  note: string;
+  updatedAt: string;
+  approvedAt: string | null;
+};
+export type ResumeDocument = DocumentState & { content: TailoredResume };
+export type CoverLetterDocument = DocumentState & { content: CoverLetter };
+export type JobDocuments = {
+  resume: ResumeDocument | null;
+  coverLetter: CoverLetterDocument | null;
+};
+
+/** One row in the web app's list of applications. */
+export type JobListItem = {
+  id: string;
+  url: string;
+  title: string;
+  company: string;
+  score: number | null;
+  resumeStatus: "draft" | "approved" | null;
+  coverLetterStatus: "draft" | "approved" | null;
+  updatedAt: string;
+};
+
+/** What the model returns when tailoring a resume, before checks. */
+export const TailoredResumeOutputSchema = z.object({
+  summary: z.string(),
+  summarySourceIds: z.array(z.string()),
+  roles: z.array(z.object({ roleId: z.string(), bulletIds: z.array(z.string()) })),
+  projectIds: z.array(z.string()),
+  skills: z.array(z.string()),
+  note: z.string(),
+});
+
+/** What the model returns when drafting a cover letter, before checks. */
+export const CoverLetterOutputSchema = z.object({
+  paragraphs: z.array(z.string()),
+  sourceIds: z.array(z.string()),
+  note: z.string(),
+});

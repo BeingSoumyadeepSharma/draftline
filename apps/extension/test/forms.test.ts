@@ -130,7 +130,7 @@ describe("real Lever form", () => {
     );
     const decision = matchField(auth.descriptor, data);
     expect(decision).toMatchObject({ status: "ready", value: "Yes" });
-    const result = await fillField(auth, "Yes", null);
+    const result = await fillField(auth, "Yes", {});
     expect(result.ok).toBe(true);
     expect((auth.elements[0] as HTMLInputElement).checked).toBe(true);
   });
@@ -201,7 +201,7 @@ describe("real Lever form", () => {
       "Milano, Milan, Italy",
       "Milan, Tennessee, United States",
     ]);
-    const result = await fillField(locationField(), "Milan, Italy", null);
+    const result = await fillField(locationField(), "Milan, Italy", {});
     expect(result).toEqual({ key: "location-input", ok: true });
     expect(input.value).toBe("Milano, Milan, Italy");
     expect(selected.value).toBe("Milano, Milan, Italy");
@@ -212,7 +212,7 @@ describe("real Lever form", () => {
       "Springfield, Illinois, United States",
       "Springfield, Missouri, United States",
     ]);
-    const result = await fillField(locationField(), "Springfield", null);
+    const result = await fillField(locationField(), "Springfield", {});
     expect(result.ok).toBe(false);
     expect(input.value).toBe("");
     expect(selected.value).toBe("");
@@ -253,9 +253,7 @@ describe("filling React-controlled fields", () => {
         },
         elements: [element],
       },
-      "Ada",
-      null,
-    );
+      "Ada", {});
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(seen).toBe("Ada");
     root.unmount();
@@ -298,9 +296,7 @@ describe("filling React-controlled fields", () => {
 
     const result = await fillField(
       combobox(document.getElementById("gender")!),
-      "Decline to self-identify",
-      null,
-    );
+      "Decline to self-identify", {});
 
     expect(result).toEqual({ key: "gender", ok: true });
     expect(picked).toBe("Decline To Self Identify");
@@ -358,9 +354,7 @@ describe("filling React-controlled fields", () => {
     const started = Date.now();
     const result = await fillField(
       locationCombobox(document.getElementById("location")!),
-      "Milan, Italy",
-      null,
-    );
+      "Milan, Italy", {});
 
     expect(result).toEqual({ key: "location", ok: true });
     expect(picked).toBe("Milano, Milan, Italy");
@@ -376,9 +370,7 @@ describe("filling React-controlled fields", () => {
 
     const result = await fillField(
       locationCombobox(document.getElementById("location")!),
-      "Rome, Georgia",
-      null,
-    );
+      "Rome, Georgia", {});
 
     expect(result.ok).toBe(false);
     expect(picked).toBe("");
@@ -392,9 +384,7 @@ describe("filling React-controlled fields", () => {
 
     const result = await fillField(
       combobox(document.getElementById("gender")!),
-      "Prefer to describe",
-      null,
-    );
+      "Prefer to describe", {});
 
     expect(result.ok).toBe(false);
     expect(picked).toBe("");
@@ -486,5 +476,34 @@ describe("reading a MyGreenhouse pop-up", () => {
     dialog.append(form);
     document.body.replaceChildren(dialog);
     expect(jobFromDocument(document, "my.greenhouse.io", "https://my.greenhouse.io/jobs/1")).toBeNull();
+  });
+});
+
+describe("attaching files", () => {
+  it("attaches the file chosen for the field's placeholder value", async () => {
+    load("greenhouse.html");
+    const fields = detectFields(document, "job-boards.greenhouse.io")!;
+    const coverLetter = byLabel(fields, "Cover Letter");
+    // jsdom has no DataTransfer, so supply a minimal one for this test.
+    (window as unknown as { DataTransfer: unknown }).DataTransfer = class {
+      private list: File[] = [];
+      items = { add: (file: File) => this.list.push(file) };
+      get files() {
+        const list = this.list;
+        return Object.assign([...list], { item: (i: number) => list[i] ?? null }) as unknown as FileList;
+      }
+    };
+    const input = coverLetter.elements[0] as HTMLInputElement;
+    let attached: FileList | null = null;
+    Object.defineProperty(input, "files", { set: (files: FileList) => (attached = files), get: () => attached });
+
+    const missing = await fillField(coverLetter, "__cover_letter__", {});
+    expect(missing.ok).toBe(false);
+
+    const result = await fillField(coverLetter, "__cover_letter__", {
+      __cover_letter__: { name: "Letter.pdf", base64: btoa("%PDF-1.7") },
+    });
+    expect(result.ok).toBe(true);
+    expect((attached as unknown as File[])[0]!.name).toBe("Letter.pdf");
   });
 });

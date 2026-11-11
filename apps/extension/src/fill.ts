@@ -13,7 +13,6 @@ import {
   isLocationLabel,
   pickLocation,
   pickOption,
-  RESUME_VALUE,
 } from "./match";
 import type { FillResult, ResumeAttachment } from "./types";
 
@@ -205,7 +204,7 @@ function choiceFor(
 export async function fillField(
   field: DetectedField,
   value: string,
-  resume: ResumeAttachment | null,
+  files: Record<string, ResumeAttachment>,
 ): Promise<FillResult> {
   const { key, kind } = field.descriptor;
   const fail = (reason: string): FillResult => ({ key, ok: false, reason });
@@ -251,10 +250,12 @@ export async function fillField(
         const problem = await fillSuggest(element as HTMLInputElement, value);
         return problem ? fail(problem) : { key, ok: true };
       }
-      case "file":
-        if (value !== RESUME_VALUE || !resume) return fail("No file to attach");
-        attachFile(element as HTMLInputElement, resume);
+      case "file": {
+        const file = files[value];
+        if (!file) return fail("No file to attach");
+        attachFile(element as HTMLInputElement, file);
         return { key, ok: true };
+      }
       case "checkbox":
         return fail("Tick this yourself");
     }

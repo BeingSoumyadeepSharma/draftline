@@ -7,6 +7,7 @@
  *   answers      saved answers to common application questions
  *   resume_file  one row: the PDF the extension attaches
  *   jobs         jobs the user has opened, with any saved AI fit analysis
+ *   documents    tailored resume and cover letter per job, with approved PDFs
  *   ai_settings  one row: the chosen AI provider, address, model and key
  *
  * Single-row tables use id = 1. node:sqlite returns plain records, so results
@@ -21,8 +22,14 @@ import {
   type AiSettingsInput,
   type Answer,
   type AnswerCategory,
+  type CoverLetter,
+  type DocumentKind,
   type JobAnalysis,
+  type JobDocuments,
   type JobInput,
+  type JobListItem,
+  type Source,
+  type TailoredResume,
   type AnswerInput,
   type Profile,
   type ResumeFileMeta,
@@ -99,6 +106,19 @@ export function createStore(path: string) {
       analyzed_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS documents (
+      job_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      content TEXT NOT NULL,
+      sources TEXT NOT NULL,
+      note TEXT NOT NULL,
+      status TEXT NOT NULL,
+      pdf BLOB,
+      file_name TEXT,
+      updated_at TEXT NOT NULL,
+      approved_at TEXT,
+      PRIMARY KEY (job_id, kind)
     );
     CREATE TABLE IF NOT EXISTS ai_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -253,6 +273,103 @@ export function createStore(path: string) {
            analysis = ?, analyzed_at = ?, updated_at = ? WHERE id = ?`,
       ).run(details.title, details.company, details.location, JSON.stringify(analysis), now, now, id);
       return this.getJob(id)!;
+    },
+
+    /** Every saved job with its fit score and document status, newest first. */
+    listJobs(): JobListItem[] {
+      const rows = db
+        .prepare(
+          `SELECT j.id, j.url, j.title, j.company, j.analysis, j.updated_at AS updatedAt,
+             r.status AS resumeStatus, c.status AS coverLetterStatus
+           FROM jobs j
+           LEFT JOIN documents r ON r.job_id = j.id AND r.kind = 'resume'
+           LEFT JOIN documents c ON c.job_id = j.id AND c.kind = 'cover_letter'
+           ORDER BY j.updated_at DESC`,
+        )
+        .all() as unknown as Array<Omit<JobListItem, "score"> & { analysis: string | null }>;
+      return rows.map(({ analysis, ...row }) => ({
+        ...row,
+        score: analysis ? (JSON.parse(analysis) as JobAnalysis).score : null,
+      }));
+    },
+
+    getDocuments(jobId: string): JobDocuments {
+      const rows = db
+        .prepare(
+          `SELECT kind, content, sources, note, status, updated_at AS updatedAt,
+             approved_at AS approvedAt FROM documents WHERE job_id = ?`,
+        )
+        .all(jobId) as unknown as Array<{
+        kind: DocumentKind;
+        content: string;
+        sources: string;
+        note: string;
+        status: "draft" | "approved";
+        updatedAt: string;
+        approvedAt: string | null;
+      }>;
+      const read = (kind: DocumentKind) => {
+        const row = rows.find((r) => r.kind === kind);
+        if (!row) return null;
+        return {
+          status: row.status,
+          content: JSON.parse(row.content),
+          sources: JSON.parse(row.sources) as Source[],
+          note: row.note,
+          updatedAt: row.updatedAt,
+          approvedAt: row.approvedAt,
+        };
+      };
+      return { resume: read("resume"), coverLetter: read("cover_letter") };
+    },
+
+    /** Saves a new AI draft, replacing any earlier draft or approval. */
+    saveDocumentDraft(
+      jobId: string,
+      kind: DocumentKind,
+      draft: { content: TailoredResume | CoverLetter; sources: Source[]; note: string },
+    ): void {
+      db.prepare(
+        `INSERT INTO documents (job_id, kind, content, sources, note, status, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'draft', ?)
+         ON CONFLICT (job_id, kind) DO UPDATE SET content = excluded.content,
+           sources = excluded.sources, note = excluded.note, status = 'draft',
+           pdf = NULL, file_name = NULL, approved_at = NULL, updated_at = excluded.updated_at`,
+      ).run(jobId, kind, JSON.stringify(draft.content), JSON.stringify(draft.sources), draft.note, new Date().toISOString());
+    },
+
+    /** Saves the user's edits. Any approval is withdrawn until they approve again. */
+    updateDocumentContent(
+      jobId: string,
+      kind: DocumentKind,
+      content: TailoredResume | CoverLetter,
+    ): boolean {
+      const { changes } = db
+        .prepare(
+          `UPDATE documents SET content = ?, status = 'draft', pdf = NULL, file_name = NULL,
+             approved_at = NULL, updated_at = ? WHERE job_id = ? AND kind = ?`,
+        )
+        .run(JSON.stringify(content), new Date().toISOString(), jobId, kind);
+      return Number(changes) > 0;
+    },
+
+    /** Stores the approved PDF that the extension will attach. */
+    approveDocument(jobId: string, kind: DocumentKind, fileName: string, pdf: Buffer): void {
+      const now = new Date().toISOString();
+      db.prepare(
+        `UPDATE documents SET status = 'approved', pdf = ?, file_name = ?, approved_at = ?,
+           updated_at = ? WHERE job_id = ? AND kind = ?`,
+      ).run(pdf, fileName, now, now, jobId, kind);
+    },
+
+    /** The approved PDF, or null when the document isn't approved. */
+    getApprovedFile(jobId: string, kind: DocumentKind): { name: string; data: Uint8Array } | null {
+      const row = db
+        .prepare(
+          "SELECT file_name AS name, pdf AS data FROM documents WHERE job_id = ? AND kind = ? AND status = 'approved'",
+        )
+        .get(jobId, kind) as unknown as { name: string; data: Uint8Array } | undefined;
+      return row ?? null;
     },
 
     listAnswers(): Answer[] {

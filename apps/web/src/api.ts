@@ -9,10 +9,16 @@ import type {
   Answer,
   AnswerInput,
   ApiError,
+  CoverLetter,
+  DocumentKind,
+  JobDocuments,
+  JobListItem,
+  JobRecord,
   Profile,
   ResumeFileMeta,
   ResumeParseResult,
   Status,
+  TailoredResume,
 } from "@draftline/shared";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -37,6 +43,23 @@ const json = (method: string, body: unknown): RequestInit => ({
 
 export const api = {
   status: () => request<Status>("/status"),
+
+  // Jobs and their tailored documents (Applications tab)
+  listJobs: () => request<JobListItem[]>("/jobs"),
+  getJob: (id: string) => request<JobRecord>(`/jobs/${id}`),
+  getDocuments: (id: string) => request<JobDocuments>(`/jobs/${id}/documents`),
+  generateDocument: (id: string, kind: DocumentKind) =>
+    request<JobDocuments>(`/jobs/${id}/documents/${kind}/generate`, { method: "POST" }),
+  saveResume: (id: string, content: TailoredResume) =>
+    request<JobDocuments>(`/jobs/${id}/documents/resume`, json("PUT", { content })),
+  saveCoverLetter: (id: string, content: CoverLetter) =>
+    request<JobDocuments>(`/jobs/${id}/documents/cover_letter`, json("PUT", { content })),
+  approveDocument: (id: string, kind: DocumentKind) =>
+    request<JobDocuments>(`/jobs/${id}/documents/${kind}/approve`, { method: "POST" }),
+  /** Opened in a new tab; the time stops the browser showing an old copy. */
+  previewUrl: (id: string, kind: DocumentKind) =>
+    `/api/jobs/${id}/documents/${kind}/preview?t=${Date.now()}`,
+
   getProfile: () => request<Profile>("/profile"),
   saveProfile: (profile: Profile) =>
     request<Profile>("/profile", json("PUT", profile)),

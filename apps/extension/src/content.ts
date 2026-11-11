@@ -70,7 +70,7 @@ chrome.runtime.onMessage.addListener(
         const field = fields.find((f) => f.descriptor.key === key);
         results.push(
           field
-            ? await fillField(field, value, message.resume)
+            ? await fillField(field, value, message.files)
             : { key, ok: false, reason: "This field is no longer on the page" },
         );
       }

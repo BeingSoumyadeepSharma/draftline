@@ -21,10 +21,15 @@ export type Decision =
 export type MatchData = {
   profile: Profile;
   answers: Answer[];
+  /** The default resume PDF saved on the Profile page. */
   resumeName: string | null;
+  /** Approved tailored documents for this job, if any (Phase 4). */
+  tailored?: { resume: string | null; coverLetter: string | null };
 };
 
+/** Placeholder values for file fields; the panel swaps in the real file. */
 export const RESUME_VALUE = "__resume__";
+export const COVER_LETTER_VALUE = "__cover_letter__";
 
 const normalize = (text: string) =>
   text
@@ -148,9 +153,23 @@ export function matchField(field: FieldDescriptor, data: MatchData): Decision {
 
   if (field.kind === "file") {
     if (/resume|\bcv\b/.test(label)) {
+      // An approved resume tailored to this job wins over the default one.
+      if (data.tailored?.resume) {
+        return {
+          status: "ready",
+          value: RESUME_VALUE,
+          source: data.tailored.resume,
+          note: "Tailored for this job",
+        };
+      }
       return data.resumeName
         ? { status: "ready", value: RESUME_VALUE, source: data.resumeName }
         : { status: "needs_you", reason: "No resume file saved in Draftline" };
+    }
+    if (/cover/.test(label)) {
+      return data.tailored?.coverLetter
+        ? { status: "ready", value: COVER_LETTER_VALUE, source: data.tailored.coverLetter }
+        : { status: "needs_you", reason: "No approved cover letter for this job yet" };
     }
     return { status: "needs_you", reason: "Attach this file yourself" };
   }

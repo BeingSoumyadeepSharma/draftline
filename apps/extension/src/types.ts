@@ -45,7 +45,8 @@ export type FillResult = { key: string; ok: boolean; reason?: string };
 
 export type ContentMessage =
   | { type: "scan" }
-  | { type: "fill"; fields: FillRequest[]; resume: ResumeAttachment | null };
+  /** files maps a placeholder value (RESUME_VALUE, ...) to the file to attach. */
+  | { type: "fill"; fields: FillRequest[]; files: Record<string, ResumeAttachment> };
 
 export type ScanResponse = {
   site: string;
