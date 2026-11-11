@@ -92,7 +92,7 @@ async function sendToPage<T>(message: ContentMessage): Promise<PageReply<T>> {
   }
 }
 
-const DRAFTABLE_KINDS = new Set(["text", "textarea", "select", "radio"]);
+const DRAFTABLE_KINDS = new Set(["text", "textarea", "select", "radio", "buttons"]);
 
 /** Only questions no rule or saved answer covers, and never sensitive ones. */
 const canDraft = ({ field, decision }: Row) =>
@@ -390,11 +390,22 @@ function App() {
     const onUpdated = (_id: number, info: { status?: string }) => {
       if (info.status === "complete") rescan();
     };
+    // A multi-step form moved to a new step in the tab being shown.
+    const onPageChanged = async (
+      message: { type?: string },
+      sender: chrome.runtime.MessageSender,
+    ) => {
+      if (message.type !== "page-changed") return;
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (sender.tab?.id === tab?.id) rescan();
+    };
     chrome.tabs.onActivated.addListener(rescan);
     chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.runtime.onMessage.addListener(onPageChanged);
     return () => {
       chrome.tabs.onActivated.removeListener(rescan);
       chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.runtime.onMessage.removeListener(onPageChanged);
     };
   }, [scan]);
 
@@ -469,7 +480,8 @@ function App() {
         .map(({ field }) => ({
           key: field.key,
           label: field.label,
-          kind: field.kind as QuestionInput["kind"],
+          // Yes/No buttons are offered to the AI as a radio question.
+          kind: (field.kind === "buttons" ? "radio" : field.kind) as QuestionInput["kind"],
           options: field.options,
           maxLength: field.maxLength ?? null,
         }));
@@ -579,7 +591,7 @@ function App() {
         <p className="muted">
           {view.reachable
             ? "Draftline is running on this page but can't see the form. If it's behind an Apply button, open it, then check again."
-            : "Draftline isn't running on this page. It works on Greenhouse and Lever sites. If this is one, reload the page once, then check again."}
+            : "Draftline isn't running on this page. It works on Greenhouse, Lever, Ashby, Workday and LinkedIn Easy Apply. If this is one, reload the page once, then check again."}
         </p>
         <button className="ghost" onClick={() => void scan()}>
           Check again

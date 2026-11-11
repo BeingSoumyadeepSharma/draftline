@@ -34,7 +34,7 @@ const SENSITIVE_INTENTS = new Set([
 
 /** Personal or legal topics the user must always answer themselves. */
 const SENSITIVE_WORDING =
-  /accommodat|adjustment|transgender|sexual orientation|criminal|convict|date of birth|\bage\b|citizen|visa|immigration|religio|marital|pregnan|national origin/;
+  /accommodat|adjustment|transgender|sexual orientation|pronoun|lgbt|criminal|convict|date of birth|\bage\b|citizen|visa|immigration|religio|marital|pregnan|national origin/;
 
 export function intentsOf(text: string): string[] {
   const lower = text.toLowerCase();

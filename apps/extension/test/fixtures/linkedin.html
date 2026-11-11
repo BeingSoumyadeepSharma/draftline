@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+  Built from LinkedIn's Easy Apply class names, not copied from a live form:
+  Easy Apply needs a logged-in account. It tests Draftline's assumptions
+  about LinkedIn, not LinkedIn itself.
+-->
+<html><head><title>Jobs | LinkedIn</title></head><body>
+<div class="job-details-jobs-unified-top-card__job-title"><h1>Machine Learning Engineer</h1></div>
+<div class="job-details-jobs-unified-top-card__company-name">Example Labs</div>
+<div class="jobs-description__content"><div id="job-details"><p>About the job</p><p>We are looking for an engineer to build machine learning systems for search and ranking.</p><ul><li>Train and evaluate ranking models on large datasets.</li><li>Work with product teams to ship features to millions of users.</li></ul><p>Experience with Python and PyTorch is required.</p></div></div>
+<div class="jobs-easy-apply-modal" role="dialog">
+  <form>
+    <div class="jobs-easy-apply-form-section__grouping">
+      <div class="fb-dash-form-element">
+        <label for="phone-input"><span>Mobile phone number</span></label>
+        <input id="phone-input" type="text" required>
+      </div>
+    </div>
+    <div class="jobs-easy-apply-form-section__grouping">
+      <div class="fb-dash-form-element">
+        <label for="email-select"><span>Email address</span></label>
+        <select id="email-select" required><option value="">Select an option</option><option value="a">ada@example.com</option></select>
+      </div>
+    </div>
+    <div class="jobs-easy-apply-form-section__grouping">
+      <fieldset data-test-form-builder-radio-button-form-component="true">
+        <legend><span>Will you now or in the future require sponsorship?</span></legend>
+        <div><input type="radio" id="sp-yes" name="sponsor" value="Yes"><label for="sp-yes">Yes</label></div>
+        <div><input type="radio" id="sp-no" name="sponsor" value="No"><label for="sp-no">No</label></div>
+      </fieldset>
+    </div>
+    <footer><button type="button" aria-label="Continue to next step">Next</button></footer>
+  </form>
+</div>
+</body></html>

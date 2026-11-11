@@ -23,7 +23,11 @@
     {
       "matches": [
         "https://*.greenhouse.io/*",
-        "https://*.lever.co/*"
+        "https://*.lever.co/*",
+        "https://jobs.ashbyhq.com/*",
+        "https://*.myworkdayjobs.com/*",
+        "https://*.myworkday.com/*",
+        "https://www.linkedin.com/*"
       ],
       "js": [
         "content.js"

@@ -1,6 +1,6 @@
 # Draftline
 
-A job application assistant that runs on your own machine. It keeps your profile and saved answers, fills Greenhouse and Lever applications from them, and can use AI to check your fit for a job and draft answers to open questions. You review everything and submit applications yourself.
+A job application assistant that runs on your own machine. It keeps your profile and saved answers, fills job applications on Greenhouse, Lever, Ashby, Workday and LinkedIn Easy Apply from them, and can use AI to check your fit for a job and draft answers to open questions. You review everything and submit applications yourself.
 
 ## Run it
 
@@ -21,9 +21,11 @@ Your profile and API key are stored in `data/draftline.db`, which is ignored by 
 pnpm --filter @draftline/extension build
 ```
 
-In Chrome, open `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and select `apps/extension/dist`. Click the Draftline toolbar icon on a Greenhouse or Lever application page to open the side panel. Reload any application page that was already open.
+In Chrome, open `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and select `apps/extension/dist`. Click the Draftline toolbar icon on a Greenhouse, Lever, Ashby, Workday or LinkedIn Easy Apply application to open the side panel. Reload any application page that was already open.
 
-Draftline fills only the fields you leave ticked. It never submits an application.
+Draftline fills only the fields you leave ticked. It never submits an application, and on multi-step forms it never moves to the next step for you.
+
+LinkedIn's terms forbid tools that automate activity on the site. Draftline acts only on the Easy Apply step you have open and only when you click Fill, which lowers the risk to your account but does not remove it.
 
 ## How the code fits together
 
@@ -49,7 +51,7 @@ Each source file starts with a comment explaining its job; start with
 
 ## Layout
 
-- `apps/extension`: Chrome extension for Greenhouse and Lever
+- `apps/extension`: Chrome extension for Greenhouse, Lever, Ashby, Workday and LinkedIn Easy Apply
 - `apps/web`: React app
 - `apps/server`: local API, SQLite storage, Claude calls
 - `packages/shared`: schemas and types used by both

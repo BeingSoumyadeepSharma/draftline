@@ -129,6 +129,51 @@ async function fillCombobox(
 }
 
 /**
+ * Some sites (Workday) only react to the full sequence a real mouse press
+ * produces, not to a bare click event.
+ */
+function pressLikeUser(element: HTMLElement): void {
+  const view = element.ownerDocument.defaultView!;
+  // Draftline must never submit: a submit button inside a form would.
+  if (
+    element instanceof view.HTMLButtonElement &&
+    element.type === "submit" &&
+    element.form
+  ) {
+    throw new Error("this button would submit the form, so fill it yourself");
+  }
+  const Pointer = view.PointerEvent ?? view.MouseEvent;
+  element.dispatchEvent(new Pointer("pointerdown", { bubbles: true }));
+  element.dispatchEvent(new view.MouseEvent("mousedown", { bubbles: true }));
+  element.dispatchEvent(new Pointer("pointerup", { bubbles: true }));
+  element.dispatchEvent(new view.MouseEvent("mouseup", { bubbles: true }));
+  element.click();
+}
+
+/**
+ * Workday dropdowns are buttons that open a list somewhere else on the page.
+ * Opens it, picks the matching choice, and closes it again if none matches.
+ */
+async function fillListbox(button: HTMLElement, value: string): Promise<string | null> {
+  const doc = button.ownerDocument;
+  const options = () =>
+    [...doc.querySelectorAll<HTMLElement>("[role='option']")].filter(
+      (option) => !option.closest("[aria-hidden='true']"),
+    );
+  pressLikeUser(button);
+  const list = await waitFor(() => (options().length > 0 ? options() : null), 3000);
+  if (!list) return "The list of choices didn't open";
+  const texts = list.map((option) => option.textContent?.trim() ?? "");
+  const picked = pickOption(value, texts);
+  if (picked === null) {
+    press(button, "Escape");
+    return `None of the choices matched "${value}"`;
+  }
+  pressLikeUser(list[texts.indexOf(picked)]!);
+  return null;
+}
+
+/**
  * Lever searches only after a keypress and clears the box if it loses focus
  * with suggestions open, so this types, waits for results, and picks one the
  * way a click would. If nothing fits, the box is left empty for the user.
@@ -255,6 +300,17 @@ export async function fillField(
         if (!file) return fail("No file to attach");
         attachFile(element as HTMLInputElement, file);
         return { key, ok: true };
+      }
+      case "buttons": {
+        const index = field.descriptor.options.indexOf(value);
+        const button = field.elements[index];
+        if (!button) return fail("That choice is no longer available");
+        pressLikeUser(button);
+        return { key, ok: true };
+      }
+      case "listbox": {
+        const problem = await fillListbox(element, value);
+        return problem ? fail(problem) : { key, ok: true };
       }
       case "checkbox":
         return fail("Tick this yourself");

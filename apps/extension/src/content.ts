@@ -11,16 +11,25 @@
  *                                        `-- fill.ts    writes to the page
  *   match.ts (rules, no AI) runs in the side panel to decide what goes where.
  */
-import { adapterFor, detectFields, jobFromDocument } from "./detect";
+import {
+  adapterFor,
+  canonicalJobUrl,
+  detectFields,
+  jobFromDocument,
+  jobFromWorkdayApi,
+  workdayJobApiUrl,
+} from "./detect";
 import { fillField } from "./fill";
 import type {
   ContentMessage,
   FillResponse,
+  PageChangedMessage,
   PageJob,
   ScanResponse,
 } from "./types";
 
-let leverJob: Promise<PageJob | null> | null = null;
+// Fetched job details, keyed by address, so each is loaded once per page.
+const fetchedJobs = new Map<string, Promise<PageJob | null>>();
 
 /**
  * Lever's apply page shows only the job title, so the description is read
@@ -29,22 +38,78 @@ let leverJob: Promise<PageJob | null> | null = null;
 function fetchLeverPosting(): Promise<PageJob | null> {
   const postingUrl = location.href.replace(/\/apply\/?(?=$|[?#])/, "");
   if (postingUrl === location.href) return Promise.resolve(null);
-  leverJob ??= fetch(postingUrl, { credentials: "same-origin" })
-    .then((response) => (response.ok ? response.text() : ""))
-    .then((html) => {
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      return jobFromDocument(doc, location.hostname, postingUrl);
-    })
-    .catch(() => null);
-  return leverJob;
+  if (!fetchedJobs.has(postingUrl)) {
+    fetchedJobs.set(
+      postingUrl,
+      fetch(postingUrl, { credentials: "same-origin" })
+        .then((response) => (response.ok ? response.text() : ""))
+        .then((html) => {
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          return jobFromDocument(doc, location.hostname, postingUrl);
+        })
+        .catch(() => null),
+    );
+  }
+  return fetchedJobs.get(postingUrl)!;
+}
+
+/**
+ * Workday's application pages don't show the job, so it's read from
+ * Workday's public job-details address on the same site.
+ */
+function fetchWorkdayJob(): Promise<PageJob | null> {
+  const api = workdayJobApiUrl(location.href);
+  if (!api) return Promise.resolve(null);
+  const postingUrl = location.href.replace(/\/apply(\/.*)?$/, "");
+  if (!fetchedJobs.has(api)) {
+    fetchedJobs.set(
+      api,
+      fetch(api, { headers: { accept: "application/json" } })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data) => jobFromWorkdayApi(document, data, postingUrl))
+        .catch(() => null),
+    );
+  }
+  return fetchedJobs.get(api)!;
 }
 
 async function readJob(): Promise<PageJob | null> {
-  const onPage = jobFromDocument(document, location.hostname, location.href);
+  const onPage = jobFromDocument(document, location.hostname, canonicalJobUrl(location.href));
   if (onPage) return onPage;
-  if (adapterFor(location.hostname)?.id === "Lever") return fetchLeverPosting();
-  return null;
+  switch (adapterFor(location.hostname)?.id) {
+    case "Lever":
+      return fetchLeverPosting();
+    case "Workday":
+      return fetchWorkdayJob();
+    default:
+      return null;
+  }
 }
+
+/**
+ * Multi-step forms (Workday, LinkedIn) swap fields without loading a new
+ * page. When the set of fields changes, tell the side panel to rescan.
+ */
+let lastFieldKeys = "";
+let changeTimer: ReturnType<typeof setTimeout> | undefined;
+new MutationObserver(() => {
+  clearTimeout(changeTimer);
+  changeTimer = setTimeout(() => {
+    const keys = (detectFields(document, location.hostname) ?? [])
+      .map((field) => field.descriptor.key)
+      .join("|");
+    if (keys === lastFieldKeys) return;
+    const firstReport = lastFieldKeys === "";
+    lastFieldKeys = keys;
+    // The panel scans on its own when it opens; only later changes matter.
+    if (firstReport && !keys) return;
+    chrome.runtime
+      .sendMessage({ type: "page-changed" } satisfies PageChangedMessage)
+      .catch(() => {
+        // No side panel open: nothing to tell.
+      });
+  }, 700);
+}).observe(document.documentElement, { childList: true, subtree: true });
 
 // Applications can be embedded in an iframe. Only the frame holding the form
 // replies, so the side panel gets a single answer.

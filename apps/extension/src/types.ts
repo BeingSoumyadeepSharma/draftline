@@ -12,6 +12,10 @@ export type FieldKind =
   | "combobox"
   /** A text box whose site-made suggestion list must be picked from (Lever location). */
   | "suggest"
+  /** A question answered by clicking one of a few buttons (Ashby Yes/No). */
+  | "buttons"
+  /** A button that opens a list of choices (Workday dropdowns). */
+  | "listbox"
   | "file";
 
 /** A form field as plain data, safe to pass between the page and the panel. */
@@ -47,6 +51,9 @@ export type ContentMessage =
   | { type: "scan" }
   /** files maps a placeholder value (RESUME_VALUE, ...) to the file to attach. */
   | { type: "fill"; fields: FillRequest[]; files: Record<string, ResumeAttachment> };
+
+/** Sent by the content script when a multi-step form shows new fields. */
+export type PageChangedMessage = { type: "page-changed" };
 
 export type ScanResponse = {
   site: string;

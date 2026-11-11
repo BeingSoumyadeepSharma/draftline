@@ -1,0 +1,34 @@
+<!doctype html>
+<!--
+  Built from Workday's documented data-automation-id markers, not copied from
+  a live form: Workday asks for an account before showing its application.
+  It tests Draftline's assumptions about Workday, not Workday itself.
+-->
+<html><head><title>Apply</title></head><body>
+<header><input data-automation-id="keywordSearchInput" aria-label="Search for jobs"></header>
+<main>
+  <div data-automation-id="applyFlowPage">
+    <div data-automation-id="formField-legalName--firstName">
+      <label for="name--legalName--firstName">First Name<abbr>*</abbr></label>
+      <input id="name--legalName--firstName" data-automation-id="legalNameSection_firstName" aria-required="true" type="text">
+    </div>
+    <div data-automation-id="formField-legalName--lastName">
+      <label for="name--legalName--lastName">Last Name</label>
+      <input id="name--legalName--lastName" data-automation-id="legalNameSection_lastName" type="text">
+    </div>
+    <div data-automation-id="formField-email">
+      <label for="emailAddress--emailAddress">Email Address</label>
+      <input id="emailAddress--emailAddress" data-automation-id="email" type="text">
+    </div>
+    <div data-automation-id="formField-countryDropdown">
+      <label for="country--country">Country</label>
+      <button id="country--country" type="button" aria-haspopup="listbox" data-automation-id="countryDropdown">Select One</button>
+    </div>
+    <fieldset data-automation-id="formField-candidateIsPreviousWorker">
+      <legend>Have you previously worked for this company?</legend>
+      <input type="radio" id="prev-yes" name="candidateIsPreviousWorker" value="true"><label for="prev-yes">Yes</label>
+      <input type="radio" id="prev-no" name="candidateIsPreviousWorker" value="false"><label for="prev-no">No</label>
+    </fieldset>
+  </div>
+</main>
+</body></html>

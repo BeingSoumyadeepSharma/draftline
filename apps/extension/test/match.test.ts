@@ -255,3 +255,10 @@ describe("tailored documents", () => {
     });
   });
 });
+
+describe("pronoun questions", () => {
+  it("are never offered to AI", async () => {
+    const { isSensitiveQuestion } = await import("@draftline/shared/questions");
+    expect(isSensitiveQuestion("What pronouns would you like our team to use?")).toBe(true);
+  });
+});
