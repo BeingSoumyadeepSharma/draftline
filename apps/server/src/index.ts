@@ -34,7 +34,8 @@ const app = createApp({ store, ai, hasEnvClaudeKey });
 // whether a check is due, so interval changes apply without a restart.
 function refreshDiscoveryIfDue() {
   const { lastRunAt } = store.getDiscoveryRun();
-  if (store.listSources().length === 0 || isDiscoveryRunning()) return;
+  if (isDiscoveryRunning()) return;
+  if (store.listSources().length === 0 && store.listSearches().length === 0) return;
   if (!isRunDue(lastRunAt, store.getDiscoveryPreferences().refreshMinutes)) return;
   runDiscovery(store, discoveryDeps(store, ai, hasEnvClaudeKey))
     .then((summary) => console.log(`Job discovery: ${summary}`))
@@ -43,6 +44,9 @@ function refreshDiscoveryIfDue() {
 setTimeout(refreshDiscoveryIfDue, 15_000);
 setInterval(refreshDiscoveryIfDue, 60_000);
 
-serve({ fetch: app.fetch, hostname: "127.0.0.1", port: SERVER_PORT }, () => {
-  console.log(`Draftline API running on http://127.0.0.1:${SERVER_PORT}`);
+// Only this computer may connect. In Docker, HOST is 0.0.0.0 so the port can
+// be forwarded, and compose.yaml publishes it on 127.0.0.1 only.
+const hostname = process.env.HOST ?? "127.0.0.1";
+serve({ fetch: app.fetch, hostname, port: SERVER_PORT }, () => {
+  console.log(`Draftline API running on http://${hostname}:${SERVER_PORT}`);
 });

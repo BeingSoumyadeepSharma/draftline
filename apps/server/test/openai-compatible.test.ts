@@ -4,8 +4,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { EMPTY_PROFILE } from "@draftline/shared";
-import { parseResumeCompatible } from "./openai-compatible.js";
-import type { AiConfig } from "./store.js";
+import { parseResumeCompatible } from "../src/openai-compatible.js";
+import type { AiConfig } from "../src/store.js";
 
 const config: AiConfig = {
   provider: "openai_compatible",

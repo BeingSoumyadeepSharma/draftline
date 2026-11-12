@@ -1,0 +1,27 @@
+# Runs Draftline in Docker:
+#   docker compose up -d --build
+# Then open http://127.0.0.1:5173 and load the Chrome extension as usual.
+#
+# - Ports are published on 127.0.0.1 only, so other devices on your network
+#   can't reach your data.
+# - Your database lives in ./data on this computer (the same folder `pnpm dev`
+#   uses), so it survives rebuilds and moves between machines with the project.
+# - Keys in ./.env are read if the file exists; keys saved in the app win.
+# - Ollama running on this computer is reachable as usual: Draftline sends
+#   localhost addresses to host.docker.internal from inside the container.
+services:
+  draftline:
+    build: .
+    image: draftline:latest
+    ports:
+      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - path: .env
+        required: false
+    # Makes host.docker.internal work on Linux too (Docker Desktop has it already).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

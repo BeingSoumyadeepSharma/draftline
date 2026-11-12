@@ -1,0 +1,13 @@
+# Everything here stays out of the image: dependencies are installed fresh for
+# Linux, and personal data and keys never go into an image.
+**/node_modules
+**/dist
+data
+.env
+.env.*
+!.env.example
+.git
+.github
+.claude
+*.log
+.DS_Store

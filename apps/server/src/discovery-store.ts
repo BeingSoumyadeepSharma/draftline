@@ -8,6 +8,9 @@
  *                       whether they were saved, dismissed or seen, and whether
  *                       they were already listed when their board was added
  *   discovery_settings  one row: filters, AI on/off, and the last run
+ *   position_searches   searches by role across companies (search.ts)
+ *   search_runs         when each search last used each source, for limits
+ *   search_settings     one row: which search sources to use, and their keys
  */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -17,8 +20,12 @@ import type {
   DiscoveryPreferences,
   DiscoverySource,
   JobAlert,
+  PositionSearch,
+  SearchProvider,
+  SearchProvidersInput,
 } from "@draftline/shared";
 import type { BoardJob } from "./boards.js";
+import { DEFAULT_SEARCH_SETTINGS, type SearchSettings } from "./search.js";
 
 const DEFAULT_PREFERENCES: DiscoveryPreferences = {
   keywords: [],
@@ -31,7 +38,7 @@ const DEFAULT_PREFERENCES: DiscoveryPreferences = {
 const JOB_COLUMNS = `id, source_id AS sourceId, url, title, company, location,
   posted_at AS postedAt, first_seen_at AS firstSeenAt, rule_score AS ruleScore,
   matched_skills AS matchedSkills, ai_score AS aiScore, ai_reason AS aiReason,
-  status, job_id AS jobId, baseline, seen_at AS seenAt`;
+  status, job_id AS jobId, baseline, seen_at AS seenAt, via`;
 
 type JobRow = Omit<DiscoveredJob, "matchedSkills" | "baseline"> & {
   matchedSkills: string;
@@ -73,7 +80,27 @@ export function createDiscoveryStore(db: DatabaseSync) {
       status TEXT NOT NULL DEFAULT 'new',
       job_id TEXT,
       baseline INTEGER NOT NULL DEFAULT 0,
-      seen_at TEXT
+      seen_at TEXT,
+      via TEXT NOT NULL DEFAULT '',
+      last_seen_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS position_searches (
+      id TEXT PRIMARY KEY,
+      position TEXT NOT NULL,
+      location TEXT NOT NULL,
+      last_run_at TEXT,
+      last_error TEXT,
+      UNIQUE (position, location)
+    );
+    CREATE TABLE IF NOT EXISTS search_runs (
+      search_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      last_at TEXT NOT NULL,
+      PRIMARY KEY (search_id, provider)
+    );
+    CREATE TABLE IF NOT EXISTS search_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      data TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS discovery_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -93,6 +120,8 @@ export function createDiscoveryStore(db: DatabaseSync) {
     db.exec("ALTER TABLE discovered_jobs ADD COLUMN baseline INTEGER NOT NULL DEFAULT 1");
   }
   if (!columns.has("seen_at")) db.exec("ALTER TABLE discovered_jobs ADD COLUMN seen_at TEXT");
+  if (!columns.has("via")) db.exec("ALTER TABLE discovered_jobs ADD COLUMN via TEXT NOT NULL DEFAULT ''");
+  if (!columns.has("last_seen_at")) db.exec("ALTER TABLE discovered_jobs ADD COLUMN last_seen_at TEXT");
 
   const settingsRow = () =>
     db.prepare("SELECT preferences, last_run_at AS lastRunAt, last_summary AS lastSummary FROM discovery_settings WHERE id = 1").get() as unknown as
@@ -169,32 +198,34 @@ export function createDiscoveryStore(db: DatabaseSync) {
       sourceId: string,
       job: BoardJob & { ruleScore: number; matchedSkills: string[] },
       baseline = false,
+      via = "",
     ): boolean {
+      const now = new Date().toISOString();
       const existing = db
         .prepare("SELECT description FROM discovered_jobs WHERE url = ?")
         .get(job.url) as unknown as { description: string } | undefined;
       if (!existing) {
         db.prepare(
           `INSERT INTO discovered_jobs (id, source_id, url, title, company, location, description,
-             posted_at, first_seen_at, rule_score, matched_skills, baseline)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             posted_at, first_seen_at, rule_score, matched_skills, baseline, via, last_seen_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           randomUUID(), sourceId, job.url, job.title, job.company, job.location, job.description,
-          job.postedAt, new Date().toISOString(), job.ruleScore, JSON.stringify(job.matchedSkills),
-          baseline ? 1 : 0,
+          job.postedAt, now, job.ruleScore, JSON.stringify(job.matchedSkills),
+          baseline ? 1 : 0, via, now,
         );
         return true;
       }
       const changed = existing.description !== job.description;
       db.prepare(
         `UPDATE discovered_jobs SET title = ?, company = ?, location = ?, description = ?,
-           posted_at = ?, rule_score = ?, matched_skills = ?,
+           posted_at = ?, rule_score = ?, matched_skills = ?, last_seen_at = ?,
            ai_score = CASE WHEN ? THEN NULL ELSE ai_score END,
            ai_reason = CASE WHEN ? THEN '' ELSE ai_reason END
          WHERE url = ?`,
       ).run(
         job.title, job.company, job.location, job.description, job.postedAt, job.ruleScore,
-        JSON.stringify(job.matchedSkills), changed ? 1 : 0, changed ? 1 : 0, job.url,
+        JSON.stringify(job.matchedSkills), now, changed ? 1 : 0, changed ? 1 : 0, job.url,
       );
       return false;
     },
@@ -240,6 +271,124 @@ export function createDiscoveryStore(db: DatabaseSync) {
         .prepare(`SELECT ${JOB_COLUMNS}, description FROM discovered_jobs WHERE id = ?`)
         .get(id) as unknown as (JobRow & { description: string }) | undefined;
       return row ? { ...toJob(row), description: row.description } : null;
+    },
+
+    // --- Position searches ---
+
+    listSearches(): PositionSearch[] {
+      return db
+        .prepare(
+          `SELECT s.id, s.position, s.location, s.last_run_at AS lastRunAt, s.last_error AS lastError,
+             (SELECT COUNT(*) FROM discovered_jobs d WHERE d.source_id = s.id AND d.status != 'dismissed') AS jobCount
+           FROM position_searches s ORDER BY s.position COLLATE NOCASE`,
+        )
+        .all() as unknown as PositionSearch[];
+    },
+
+    /** Adds a search, or returns the existing one for the same role and place. */
+    addSearch(position: string, location: string): PositionSearch {
+      db.prepare(
+        `INSERT INTO position_searches (id, position, location) VALUES (?, ?, ?)
+         ON CONFLICT (position, location) DO NOTHING`,
+      ).run(randomUUID(), position, location);
+      return this.listSearches().find((s) => s.position === position && s.location === location)!;
+    },
+
+    /** Removes a search and its unsaved jobs. Saved jobs stay in Applications. */
+    removeSearch(id: string): boolean {
+      db.prepare("DELETE FROM discovered_jobs WHERE source_id = ? AND status != 'saved'").run(id);
+      db.prepare("DELETE FROM search_runs WHERE search_id = ?").run(id);
+      return Number(db.prepare("DELETE FROM position_searches WHERE id = ?").run(id).changes) > 0;
+    },
+
+    recordSearchResult(id: string, error: string | null): void {
+      db.prepare("UPDATE position_searches SET last_run_at = ?, last_error = ? WHERE id = ?").run(
+        new Date().toISOString(),
+        error,
+        id,
+      );
+    },
+
+    /** When this search last used this source, or null if never. */
+    getSearchRun(searchId: string, provider: SearchProvider): string | null {
+      const row = db
+        .prepare("SELECT last_at AS lastAt FROM search_runs WHERE search_id = ? AND provider = ?")
+        .get(searchId, provider) as unknown as { lastAt: string } | undefined;
+      return row?.lastAt ?? null;
+    },
+
+    setSearchRun(searchId: string, provider: SearchProvider): void {
+      db.prepare(
+        `INSERT INTO search_runs (search_id, provider, last_at) VALUES (?, ?, ?)
+         ON CONFLICT (search_id, provider) DO UPDATE SET last_at = excluded.last_at`,
+      ).run(searchId, provider, new Date().toISOString());
+    },
+
+    /**
+     * Settings saved in the app, or null if never saved. Keys here win over
+     * .env; see resolveSearchSettings in search.ts.
+     */
+    getSavedSearchSettings(): SearchSettings | null {
+      const row = db.prepare("SELECT data FROM search_settings WHERE id = 1").get() as unknown as
+        | { data: string }
+        | undefined;
+      if (!row) return null;
+      const saved = JSON.parse(row.data) as Partial<SearchSettings>;
+      return {
+        ...DEFAULT_SEARCH_SETTINGS,
+        ...saved,
+        adzuna: { ...DEFAULT_SEARCH_SETTINGS.adzuna, ...saved.adzuna },
+        brave: { ...DEFAULT_SEARCH_SETTINGS.brave, ...saved.brave },
+      };
+    },
+
+    /**
+     * Saves source settings. A blank key keeps the saved one. Keys from .env
+     * are never saved here.
+     */
+    saveSearchSettings(input: SearchProvidersInput): void {
+      const previous = this.getSavedSearchSettings() ?? DEFAULT_SEARCH_SETTINGS;
+      const settings: SearchSettings = {
+        remotive: input.remotive,
+        arbeitnow: input.arbeitnow,
+        adzuna: {
+          enabled: input.adzuna.enabled,
+          country: input.adzuna.country,
+          appId: input.adzuna.appId || previous.adzuna.appId,
+          appKey: input.adzuna.appKey || previous.adzuna.appKey,
+        },
+        brave: {
+          enabled: input.brave.enabled,
+          apiKey: input.brave.apiKey || previous.brave.apiKey,
+        },
+      };
+      db.prepare(
+        `INSERT INTO search_settings (id, data) VALUES (1, ?)
+         ON CONFLICT (id) DO UPDATE SET data = excluded.data`,
+      ).run(JSON.stringify(settings));
+    },
+
+    /** True when the same job (title and company) is already listed under another address. */
+    isDuplicate(title: string, company: string, url: string): boolean {
+      return Boolean(
+        db
+          .prepare(
+            "SELECT 1 FROM discovered_jobs WHERE lower(title) = lower(?) AND lower(company) = lower(?) AND url != ? LIMIT 1",
+          )
+          .get(title, company, url),
+      );
+    },
+
+    /**
+     * Search results come and go between runs, so unsaved ones are kept until
+     * no search has returned them for this many days.
+     */
+    pruneStaleSearchJobs(days: number): void {
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      db.prepare(
+        `DELETE FROM discovered_jobs WHERE status != 'saved' AND last_seen_at < ?
+           AND source_id IN (SELECT id FROM position_searches)`,
+      ).run(cutoff);
     },
 
     /** New jobs that appeared after `since`, for desktop notifications. */

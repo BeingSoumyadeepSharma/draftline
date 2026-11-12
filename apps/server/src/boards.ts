@@ -89,11 +89,17 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
-async function getJson(url: string, fetchFn: typeof fetch, name: string): Promise<unknown> {
+export async function getJson(
+  url: string,
+  fetchFn: typeof fetch,
+  name: string,
+  init: RequestInit = {},
+): Promise<unknown> {
   let response: Response;
   try {
     response = await fetchFn(url, {
-      headers: { accept: "application/json" },
+      ...init,
+      headers: { accept: "application/json", ...(init.headers as Record<string, string>) },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch {
@@ -138,6 +144,25 @@ type AshbyResponse = {
   }>;
 };
 
+/** Lever splits a posting into an intro, titled lists and a closing. */
+function toLeverJobs(data: LeverResponse): BoardJob[] {
+  return data.map((job) => ({
+    url: job.hostedUrl,
+    title: job.text,
+    company: "",
+    location: job.categories?.location ?? "",
+    description: [
+      job.descriptionPlain ?? "",
+      ...(job.lists ?? []).map((list) => `${list.text}\n${htmlToText(list.content)}`),
+      job.additionalPlain ?? "",
+    ]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join("\n\n"),
+    postedAt: job.createdAt ? new Date(job.createdAt).toISOString() : null,
+  }));
+}
+
 /** Reads every current posting on one board. */
 export async function fetchBoard(
   source: BoardSource,
@@ -168,22 +193,7 @@ export async function fetchBoard(
       fetchFn,
       source.slug,
     )) as LeverResponse;
-    return data.map((job) => ({
-      url: job.hostedUrl,
-      title: job.text,
-      company: "",
-      location: job.categories?.location ?? "",
-      // Lever splits a posting into an intro, titled lists and a closing.
-      description: [
-        job.descriptionPlain ?? "",
-        ...(job.lists ?? []).map((list) => `${list.text}\n${htmlToText(list.content)}`),
-        job.additionalPlain ?? "",
-      ]
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .join("\n\n"),
-      postedAt: job.createdAt ? new Date(job.createdAt).toISOString() : null,
-    }));
+    return toLeverJobs(data);
   }
 
   const data = (await getJson(
@@ -201,4 +211,62 @@ export async function fetchBoard(
       description: (job.descriptionPlain ?? "").trim(),
       postedAt: job.publishedAt ?? null,
     }));
+}
+
+/**
+ * Reads one posting from its address on Greenhouse, Lever or Ashby, for jobs
+ * found by web search. Returns null for other sites or closed postings.
+ * Ashby has no single-posting API, so its whole board is read once per run
+ * and kept in `ashbyBoards`.
+ */
+export async function fetchPosting(
+  href: string,
+  fetchFn: typeof fetch,
+  ashbyBoards: Map<string, Promise<BoardJob[]>>,
+): Promise<BoardJob | null> {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  const [slug, ...rest] = url.pathname.split("/").filter(Boolean);
+  if (!slug || !SLUG.test(slug)) return null;
+  const host = url.hostname.toLowerCase();
+  try {
+    if ((host === "job-boards.greenhouse.io" || host === "boards.greenhouse.io") && rest[0] === "jobs" && /^\d+$/.test(rest[1] ?? "")) {
+      const job = (await getJson(
+        `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs/${rest[1]}`,
+        fetchFn,
+        slug,
+      )) as NonNullable<GreenhouseResponse["jobs"]>[number];
+      return {
+        url: job.absolute_url,
+        title: job.title,
+        company: job.company_name ?? "",
+        location: job.location?.name ?? "",
+        description: htmlToText(decodeEntities(job.content ?? "")),
+        postedAt: job.first_published ?? job.updated_at ?? null,
+      };
+    }
+    if (host === "jobs.lever.co" && /^[0-9a-f-]{36}$/i.test(rest[0] ?? "")) {
+      const job = (await getJson(
+        `https://api.lever.co/v0/postings/${slug}/${rest[0]}?mode=json`,
+        fetchFn,
+        slug,
+      )) as LeverResponse[number];
+      const [posting] = toLeverJobs([job]);
+      return posting ?? null;
+    }
+    if (host === "jobs.ashbyhq.com" && rest[0]) {
+      if (!ashbyBoards.has(slug)) {
+        ashbyBoards.set(slug, fetchBoard({ kind: "ashby", slug }, fetchFn).catch(() => []));
+      }
+      const board = await ashbyBoards.get(slug)!;
+      return board.find((job) => job.url.includes(rest[0]!)) ?? null;
+    }
+  } catch {
+    return null; // Closed or moved: skip it.
+  }
+  return null;
 }

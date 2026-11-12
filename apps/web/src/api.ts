@@ -19,6 +19,7 @@ import type {
   JobRecord,
   Profile,
   ResumeFileMeta,
+  SearchProvidersInput,
   ResumeParseResult,
   Status,
   TailoredResume,
@@ -57,6 +58,12 @@ export const api = {
   removeDiscoverySource: (id: string) =>
     request<DiscoveryState>(`/discovery/sources/${id}`, { method: "DELETE" }),
   refreshDiscovery: () => request<DiscoveryState>("/discovery/refresh", { method: "POST" }),
+  addSearch: (position: string, location: string) =>
+    request<DiscoveryState>("/discovery/searches", json("POST", { position, location })),
+  removeSearch: (id: string) =>
+    request<DiscoveryState>(`/discovery/searches/${id}`, { method: "DELETE" }),
+  saveSearchProviders: (input: SearchProvidersInput) =>
+    request<DiscoveryState>("/discovery/providers", json("PUT", input)),
   markDiscoverySeen: () => request<{ ok: true }>("/discovery/seen", { method: "POST" }),
   saveDiscoveredJob: (id: string) =>
     request<{ jobId: string; state: DiscoveryState }>(`/discovery/jobs/${id}/save`, { method: "POST" }),

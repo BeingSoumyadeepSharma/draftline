@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { EMPTY_PROFILE, type Answer, type Profile, type QuestionInput } from "@draftline/shared";
-import { analyzeJob, buildFacts, draftAnswers } from "./jobs.js";
+import { analyzeJob, buildFacts, draftAnswers } from "../src/jobs.js";
 
 const profile: Profile = {
   ...EMPTY_PROFILE,

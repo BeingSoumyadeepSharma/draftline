@@ -1,0 +1,64 @@
+# Publishes a GitHub Release when a version tag is pushed, for example:
+#   git tag v0.2.0 && git push origin v0.2.0
+# The tag must match "version" in apps/extension/manifest.json. The release
+# gets a zip of the built extension (unzip it, then "Load unpacked" in Chrome)
+# and notes generated from the commits since the last release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish the extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Check the tag matches the extension's version
+        run: |
+          version="$(node -p "require('./apps/extension/manifest.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match manifest.json version $version"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Never release something that doesn't pass the same checks as CI.
+      - name: Typecheck and test
+        run: |
+          pnpm typecheck
+          pnpm test
+
+      - name: Build the extension
+        run: pnpm build:extension
+
+      - name: Zip the extension
+        run: |
+          cd apps/extension/dist
+          zip -r "$GITHUB_WORKSPACE/draftline-extension-$GITHUB_REF_NAME.zip" .
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "draftline-extension-$GITHUB_REF_NAME.zip" \
+            --title "Draftline $GITHUB_REF_NAME" \
+            --generate-notes

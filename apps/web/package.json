@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "start": "vite preview"
   },
   "dependencies": {
     "@draftline/shared": "workspace:^",

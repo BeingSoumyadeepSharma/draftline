@@ -16,6 +16,16 @@
 import { AiRankingOutputSchema, type DiscoveryPreferences, type Profile } from "@draftline/shared";
 import { aiSettingsView, type AiService, type Generate } from "./ai.js";
 import { fetchBoard, type BoardJob } from "./boards.js";
+import {
+  PROVIDER_LABELS,
+  PROVIDER_MIN_MINUTES,
+  readyProviders,
+  resolveSearchSettings,
+  runProvider,
+  titleMatchesPosition,
+  type SearchContext,
+  type SearchEnv,
+} from "./search.js";
 import { buildFacts, factsBlock, UNTRUSTED_POSTING, type Facts } from "./jobs.js";
 import type { Store } from "./store.js";
 
@@ -119,7 +129,70 @@ type RunDeps = {
   generate: Generate | null;
   buildFacts: (profile: Profile) => Facts;
   fetchFn?: typeof fetch;
+  /** Fallback search keys; process.env when left out. */
+  env?: SearchEnv;
 };
+
+/** Days an unsaved search result is kept after searches stop returning it. */
+const SEARCH_RESULT_DAYS = 21;
+
+/**
+ * Runs every position search through every ready source that's due (see
+ * PROVIDER_MIN_MINUTES), keeping results whose title matches the position and
+ * that pass the user's exclusions and locations. A source's first results for
+ * a search are its starting list and don't alert, as with boards.
+ */
+async function runSearches(
+  store: Store,
+  deps: RunDeps,
+  preferences: DiscoveryPreferences,
+  profile: Profile,
+): Promise<{ count: number; added: number; failed: number }> {
+  const searches = store.listSearches();
+  // Keys saved in the app first, then the .env file.
+  const settings = resolveSearchSettings(store.getSavedSearchSettings(), deps.env ?? process.env);
+  const providers = readyProviders(settings);
+  const context: SearchContext = { fetchFn: deps.fetchFn ?? fetch, ashbyBoards: new Map() };
+  // Title keywords are for boards; a search's position already says the role.
+  const searchPreferences = { ...preferences, keywords: [] };
+  let added = 0;
+  let failed = 0;
+
+  for (const search of searches) {
+    const errors: string[] = [];
+    for (const provider of providers) {
+      const lastRun = store.getSearchRun(search.id, provider);
+      if (lastRun && Date.now() - Date.parse(lastRun) < PROVIDER_MIN_MINUTES[provider] * 60_000) continue;
+      let hits;
+      try {
+        hits = await runProvider(provider, search, settings, context);
+      } catch (error) {
+        failed++;
+        errors.push(`${PROVIDER_LABELS[provider]}: ${(error as Error).message}`);
+        continue;
+      }
+      const baseline = lastRun === null;
+      for (const hit of hits) {
+        if (!titleMatchesPosition(hit.title, search.position)) continue;
+        if (!passesPreferences(hit, searchPreferences)) continue;
+        // The same job often appears on several sources.
+        if (store.isDuplicate(hit.title, hit.company, hit.url)) continue;
+        const { score, matched } = ruleScore(hit, profile.skills);
+        const isNew = store.upsertDiscovered(
+          search.id,
+          { ...hit, ruleScore: score, matchedSkills: matched },
+          baseline,
+          hit.via,
+        );
+        if (isNew && !baseline) added++;
+      }
+      store.setSearchRun(search.id, provider);
+    }
+    store.recordSearchResult(search.id, errors.length ? errors.join(" ") : null);
+  }
+  store.pruneStaleSearchJobs(SEARCH_RESULT_DAYS);
+  return { count: searches.length, added, failed };
+}
 
 /** What a run needs, worked out at run time so AI settings changes apply. */
 export function discoveryDeps(
@@ -127,11 +200,13 @@ export function discoveryDeps(
   ai: AiService,
   hasEnvClaudeKey: () => boolean,
   fetchFn?: typeof fetch,
+  env?: SearchEnv,
 ): RunDeps {
   return {
     generate: aiSettingsView(store, hasEnvClaudeKey()).configured ? ai.generate : null,
     buildFacts: (profile) => buildFacts(profile, store.listAnswers()),
     fetchFn,
+    env,
   };
 }
 
@@ -172,10 +247,22 @@ export async function runDiscovery(store: Store, deps: RunDeps): Promise<string>
       }
     }
 
+    const searches = await runSearches(store, deps, preferences, profile);
+    added += searches.added;
+
+    const checked = [
+      sources.length ? `${sources.length} board${sources.length === 1 ? "" : "s"}` : "",
+      searches.count ? `${searches.count} search${searches.count === 1 ? "" : "es"}` : "",
+    ]
+      .filter(Boolean)
+      .join(" and ");
     const notes = [
-      `Checked ${sources.length} board${sources.length === 1 ? "" : "s"}; ${added} newly posted matching job${added === 1 ? "" : "s"}.`,
+      `Checked ${checked || "nothing"}; ${added} newly posted matching job${added === 1 ? "" : "s"}.`,
     ];
     if (failed > 0) notes.push(`${failed} board${failed === 1 ? "" : "s"} couldn't be read.`);
+    if (searches.failed > 0) {
+      notes.push(`${searches.failed} search source${searches.failed === 1 ? "" : "s"} failed.`);
+    }
 
     const unranked = store.unrankedDiscovered(AI_BATCH);
     if (preferences.useAi && deps.generate && unranked.length > 0) {

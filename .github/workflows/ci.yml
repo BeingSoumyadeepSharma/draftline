@@ -1,0 +1,94 @@
+# Checks every push to main and every pull request: installs the exact
+# dependency versions in pnpm-lock.yaml, then typechecks, runs every test and
+# builds the web app and the Chrome extension. Nothing here needs secrets:
+# the tests use fake AI providers and fake job boards.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      # The Node version comes from .nvmrc, the same file `nvm use` reads.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build the web app
+        run: pnpm --filter @draftline/web build
+
+      - name: Build the extension
+        run: pnpm build:extension
+
+      # The built extension, ready for "Load unpacked" after unzipping.
+      - name: Keep the built extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: draftline-extension
+          path: apps/extension/dist
+          if-no-files-found: error
+          retention-days: 14
+
+  docker:
+    name: Docker image builds and starts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build --tag draftline:ci .
+
+      # Starts the container the way compose.yaml does, then waits for the
+      # image's own health check and checks the web app answers.
+      - name: Start it and check it's healthy
+        run: |
+          mkdir -p data
+          docker run --detach --name draftline \
+            --publish 127.0.0.1:8787:8787 --publish 127.0.0.1:5173:5173 \
+            --volume "$PWD/data:/app/data" draftline:ci
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' draftline)"
+            [ "$status" = "healthy" ] && break
+            sleep 2
+          done
+          echo "Health: $status"
+          docker logs draftline
+          [ "$status" = "healthy" ]
+          curl --fail --silent http://127.0.0.1:5173/ | grep --quiet "<title>Draftline</title>"
+          curl --fail --silent http://127.0.0.1:5173/api/status
+
+      - name: Stop it
+        if: always()
+        run: docker rm --force draftline || true

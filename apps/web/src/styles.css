@@ -228,6 +228,13 @@ p {
   margin: 14px 0;
 }
 
+/* Example text in empty boxes must not look like a saved value. */
+::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
+  font-style: italic;
+}
+
 input,
 select,
 textarea {
@@ -553,4 +560,52 @@ a.ghost {
 .found-job.unseen {
   border-color: var(--accent);
   box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.start h2 {
+  margin-bottom: 6px;
+}
+
+.steps {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.steps li {
+  margin: 6px 0;
+}
+
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.add-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+.sources-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.sources-summary h2 {
+  display: inline;
+}
+
+.source-keys {
+  margin: 4px 0 8px 26px;
+}
+
+@media (max-width: 640px) {
+  .add-search {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

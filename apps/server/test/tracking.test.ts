@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createApp } from "./app.js";
-import { addDays, createStore, today } from "./store.js";
+import { createApp } from "../src/app.js";
+import { addDays, createStore, today } from "../src/store.js";
 
 const job = {
   url: "https://jobs.example.com/1",

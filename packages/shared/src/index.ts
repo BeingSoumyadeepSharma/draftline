@@ -503,6 +503,8 @@ export type DiscoveredJob = {
   baseline: boolean;
   /** When the user first saw it in the Discover tab. */
   seenAt: string | null;
+  /** Where it was found when it came from a position search, like "Adzuna". */
+  via: string;
 };
 
 /** A new matching job, for a desktop notification. */
@@ -526,9 +528,69 @@ export type DiscoveryState = {
   nextRunAt: string | null;
   /** New jobs (found after their board was added) not yet seen. */
   unseenCount: number;
+  searches: PositionSearch[];
+  providers: SearchProvidersView;
 };
 
 /** What the model returns when ranking several jobs at once, before checks. */
 export const AiRankingOutputSchema = z.object({
   scores: z.array(z.object({ id: z.string(), score: z.number(), reason: z.string() })),
 });
+
+// --- Position search (find jobs by role, across companies) ---
+
+export const SEARCH_PROVIDERS = ["remotive", "arbeitnow", "adzuna", "brave"] as const;
+export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
+
+/** Countries Adzuna's job search covers. */
+export const ADZUNA_COUNTRIES = [
+  "at", "au", "be", "br", "ca", "ch", "de", "es", "fr", "gb",
+  "in", "it", "mx", "nl", "nz", "pl", "sg", "us", "za",
+] as const;
+
+export const AddSearchSchema = z.object({
+  position: z.string().trim().min(2).max(120),
+  /** Optional: a city, country or "Remote". */
+  location: z.string().trim().max(120),
+});
+
+/** A saved search for a role, run on every check like a job board. */
+export type PositionSearch = {
+  id: string;
+  position: string;
+  location: string;
+  lastRunAt: string | null;
+  lastError: string | null;
+  jobCount: number;
+};
+
+/** Which search sources to use. A blank key keeps the saved one. */
+export const SearchProvidersInputSchema = z
+  .object({
+    remotive: z.boolean(),
+    arbeitnow: z.boolean(),
+    adzuna: z.object({
+      enabled: z.boolean(),
+      country: z.enum(ADZUNA_COUNTRIES).nullable(),
+      appId: z.string().trim().max(100),
+      appKey: z.string().trim().max(200),
+    }),
+    brave: z.object({ enabled: z.boolean(), apiKey: z.string().trim().max(200) }),
+  })
+  .superRefine((value, ctx) => {
+    if (value.adzuna.enabled && !value.adzuna.country) {
+      ctx.addIssue({ code: "custom", path: ["adzuna", "country"], message: "Choose Adzuna's country" });
+    }
+  });
+export type SearchProvidersInput = z.infer<typeof SearchProvidersInputSchema>;
+
+/** Where a key in use comes from: saved in the app, or the server's .env file. */
+export type KeySource = "saved" | "env" | null;
+
+/** What the browser may see: never the keys, only whether there is one and where from. */
+export type SearchProvidersView = {
+  remotive: boolean;
+  arbeitnow: boolean;
+  adzuna: { enabled: boolean; country: string | null; hasKey: boolean; keyFrom: KeySource };
+  brave: { enabled: boolean; hasKey: boolean; keyFrom: KeySource };
+};

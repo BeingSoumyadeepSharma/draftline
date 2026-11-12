@@ -14,6 +14,7 @@ import { extractText } from "unpdf";
 import { z } from "zod";
 import { ResumeExtractionSchema, type Profile } from "@draftline/shared";
 import { AiError } from "./ai-error.js";
+import { reachableUrl } from "./local-address.js";
 import { extractionToProfile, RESUME_SYSTEM_PROMPT } from "./resume.js";
 import type { AiConfig } from "./store.js";
 
@@ -99,7 +100,7 @@ export async function compatibleStructured<S extends z.ZodType>(
       ? request.system
       : `${request.system}\n\nReply with only a JSON object matching this JSON Schema:\n${JSON.stringify(schema)}`;
     try {
-      return await fetchFn(`${config.baseUrl}/chat/completions`, {
+      return await fetchFn(`${reachableUrl(config.baseUrl)}/chat/completions`, {
         method: "POST",
         // A redirect could carry the API key to a host the user didn't choose.
         redirect: "error",

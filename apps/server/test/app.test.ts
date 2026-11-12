@@ -9,10 +9,10 @@ import {
   type Answer,
   type Profile,
 } from "@draftline/shared";
-import { createApp } from "./app.js";
-import { AiError } from "./ai-error.js";
-import { extractionToProfile } from "./resume.js";
-import { createStore } from "./store.js";
+import { createApp } from "../src/app.js";
+import { AiError } from "../src/ai-error.js";
+import { extractionToProfile } from "../src/resume.js";
+import { createStore } from "../src/store.js";
 
 const HOST = { host: "127.0.0.1:8787" };
 const JSON_HEADERS = { ...HOST, "content-type": "application/json" };

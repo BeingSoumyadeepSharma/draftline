@@ -5,8 +5,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_PROFILE, type DiscoveryPreferences } from "@draftline/shared";
-import { createApp } from "./app.js";
-import { decodeEntities, fetchBoard, htmlToText, parseBoardUrl, type BoardJob } from "./boards.js";
+import { createApp } from "../src/app.js";
+import { decodeEntities, fetchBoard, htmlToText, parseBoardUrl, type BoardJob } from "../src/boards.js";
 import {
   AI_BATCH,
   isRunDue,
@@ -16,9 +16,9 @@ import {
   rankWithAi,
   ruleScore,
   runDiscovery,
-} from "./discovery.js";
-import { buildFacts } from "./jobs.js";
-import { createStore } from "./store.js";
+} from "../src/discovery.js";
+import { buildFacts } from "../src/jobs.js";
+import { createStore } from "../src/store.js";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });

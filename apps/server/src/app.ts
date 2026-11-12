@@ -18,6 +18,7 @@
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
+  AddSearchSchema,
   AddSourceSchema,
   AiSettingsInputSchema,
   CoverLetterSchema,
@@ -29,6 +30,7 @@ import {
   AnswerInputSchema,
   EXTENSION_ID,
   ProfileSchema,
+  SearchProvidersInputSchema,
   type AiSettingsView,
   type ApiError,
   TailoredResumeSchema,
@@ -50,6 +52,7 @@ import { aiSettingsView, type AiService } from "./ai.js";
 import { AiError } from "./ai-error.js";
 import { fetchBoard, parseBoardUrl } from "./boards.js";
 import { discoveryDeps, isDiscoveryRunning, nextRunAt, runDiscovery } from "./discovery.js";
+import { resolveSearchSettings, searchProvidersView, type SearchEnv } from "./search.js";
 import { cleanTailoredResume, draftCoverLetter, tailorResume } from "./documents.js";
 import { analyzeJob, buildFacts, draftAnswers } from "./jobs.js";
 import { documentFileName, renderCoverLetter, renderResume } from "./pdf.js";
@@ -92,9 +95,11 @@ type Deps = {
   hasEnvClaudeKey: () => boolean;
   /** For tests: replaces the network when reading job boards. */
   fetchBoards?: typeof fetch;
+  /** Fallback search keys from the .env file; process.env when left out. */
+  env?: SearchEnv;
 };
 
-export function createApp({ store, ai, hasEnvClaudeKey, fetchBoards }: Deps) {
+export function createApp({ store, ai, hasEnvClaudeKey, fetchBoards, env }: Deps) {
   const aiView = () => aiSettingsView(store, hasEnvClaudeKey());
   const app = new Hono();
   const fail = (error: string): ApiError => ({ error });
@@ -444,13 +449,17 @@ export function createApp({ store, ai, hasEnvClaudeKey, fetchBoards }: Deps) {
       nextRunAt: nextRunAt(
         run.lastRunAt,
         store.getDiscoveryPreferences().refreshMinutes,
-        store.listSources().length > 0,
+        store.listSources().length > 0 || store.listSearches().length > 0,
       ),
       unseenCount: store.countUnseen(),
+      searches: store.listSearches(),
+      providers: searchProvidersView(
+        resolveSearchSettings(store.getSavedSearchSettings(), env ?? process.env),
+      ),
     };
   };
   const refresh = () =>
-    runDiscovery(store, discoveryDeps(store, ai, hasEnvClaudeKey, fetchBoards));
+    runDiscovery(store, discoveryDeps(store, ai, hasEnvClaudeKey, fetchBoards, env));
 
   app.get("/api/discovery", (c) => c.json<DiscoveryState>(discoveryState()));
 
@@ -479,6 +488,31 @@ export function createApp({ store, ai, hasEnvClaudeKey, fetchBoards }: Deps) {
     }
     store.addSource(board.kind, board.slug, board.url);
     await refresh();
+    return c.json<DiscoveryState>(discoveryState());
+  });
+
+  // A search by role across companies, run on every check like a board.
+  app.post("/api/discovery/searches", jsonBodyLimit, async (c) => {
+    const parsed = AddSearchSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json(fail("Enter the position you're looking for."), 400);
+    store.addSearch(parsed.data.position, parsed.data.location);
+    await refresh();
+    return c.json<DiscoveryState>(discoveryState());
+  });
+
+  app.delete("/api/discovery/searches/:id", (c) =>
+    store.removeSearch(c.req.param("id"))
+      ? c.json<DiscoveryState>(discoveryState())
+      : c.json(fail("Search not found"), 404),
+  );
+
+  // Which search sources to use, and their keys (never sent back).
+  app.put("/api/discovery/providers", jsonBodyLimit, async (c) => {
+    const parsed = SearchProvidersInputSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json(fail(parsed.error.issues[0]?.message ?? "Invalid settings"), 400);
+    }
+    store.saveSearchSettings(parsed.data);
     return c.json<DiscoveryState>(discoveryState());
   });
 

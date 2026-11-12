@@ -15,10 +15,30 @@ Open http://127.0.0.1:5173 and choose an AI provider under **AI settings**. Draf
 
 Your profile and API key are stored in `data/draftline.db`, which is ignored by git. Importing a resume sends it to the provider you chose: Claude receives the PDF, and other providers receive its text.
 
+## Run with Docker
+
+To run Draftline on another computer without installing Node or pnpm, use Docker:
+
+```bash
+mkdir -p data
+docker compose up -d --build
+```
+
+Then open http://127.0.0.1:5173. What to know:
+
+- **Your data** stays in the project's `data/` folder (the same one `pnpm dev` uses), so it survives rebuilds. To move to another computer, copy the project folder including `data/`.
+- **Keys** in `.env` are read if the file exists; keys saved in the app take priority.
+- **Ports** are published on 127.0.0.1 only, so other devices on your network can't reach Draftline.
+- **Ollama** on the same computer keeps working: inside the container, Draftline sends `localhost` addresses to the computer.
+- **The Chrome extension** still runs in Chrome, not Docker: build it with `pnpm build:extension`, or download the zip from a GitHub release.
+- **Linux**: create `data/` before the first start, as above, so the container can write to it.
+
+`docker compose logs -f` shows the logs; `docker compose down` stops it.
+
 ## Install the Chrome extension
 
 ```bash
-pnpm --filter @draftline/extension build
+pnpm build:extension
 ```
 
 In Chrome, open `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and select `apps/extension/dist`. Click the Draftline toolbar icon on a Greenhouse, Lever, Ashby, Workday or LinkedIn Easy Apply application to open the side panel. Reload any application page that was already open.
@@ -44,7 +64,7 @@ Chrome extension (apps/extension)          Local server (apps/server, port 8787)
 
 - Rule-based filling (`apps/extension/src/match.ts`) runs without AI.
 - AI calls always go through the local server, which holds the API key.
-- Job discovery (`apps/server/src/discovery.ts`) reads public Greenhouse, Lever and Ashby job board APIs on your chosen interval (every 15 minutes by default) while the server runs, and the extension shows a desktop notification for each newly posted match.
+- Job discovery (`apps/server/src/discovery.ts`) finds jobs two ways on your chosen interval (every 15 minutes by default) while the server runs: searches by position across companies (`search.ts`: Remotive and Arbeitnow without keys, Adzuna and Brave web search with free keys), and the public job boards of companies you follow. The extension shows a desktop notification for each newly posted match.
 - Types and schemas shared by all three parts live in `packages/shared`.
 
 Each source file starts with a comment explaining its job; start with
@@ -60,6 +80,23 @@ Each source file starts with a comment explaining its job; start with
 ## Checks
 
 ```bash
-pnpm test
-pnpm typecheck
+pnpm check
 ```
+
+This runs the typecheck and every test, the same checks CI runs. `pnpm typecheck` and `pnpm test` run them separately.
+
+## Continuous integration and releases
+
+GitHub Actions (in `.github/`):
+
+- **CI** (`workflows/ci.yml`) runs on every push to `main` and every pull request: it installs the locked dependencies, typechecks, runs all tests, and builds the web app and the extension. The built extension is kept for 14 days as a download on the run's page.
+- **Release** (`workflows/release.yml`) runs when you push a version tag. Bump `version` in `apps/extension/manifest.json`, commit, then:
+
+  ```bash
+  git tag v0.2.0 && git push origin v0.2.0
+  ```
+
+  It checks the tag matches the manifest, runs the same checks as CI, and publishes a GitHub Release with the extension as a zip (unzip it, then **Load unpacked** in Chrome).
+- **Dependabot** (`dependabot.yml`) opens weekly pull requests for dependency and action updates, with minor and patch updates grouped together.
+
+No secrets are needed: the tests use fake AI providers and fake job boards.

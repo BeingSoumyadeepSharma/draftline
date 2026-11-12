@@ -10,7 +10,10 @@
     "dev": "pnpm --parallel --filter @draftline/server --filter @draftline/web dev",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "check": "pnpm typecheck && pnpm test",
+    "build:extension": "pnpm --filter @draftline/extension build",
+    "start": "pnpm --parallel --filter @draftline/server --filter @draftline/web start"
   },
   "devDependencies": {
     "typescript": "~5.9"

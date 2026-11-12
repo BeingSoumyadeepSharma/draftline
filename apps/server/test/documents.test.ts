@@ -6,11 +6,11 @@
 import { extractText } from "unpdf";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_PROFILE, type Profile } from "@draftline/shared";
-import { createApp } from "./app.js";
-import { cleanTailoredResume, draftCoverLetter, tailorResume } from "./documents.js";
-import { buildFacts } from "./jobs.js";
-import { renderCoverLetter, renderResume } from "./pdf.js";
-import { createStore } from "./store.js";
+import { createApp } from "../src/app.js";
+import { cleanTailoredResume, draftCoverLetter, tailorResume } from "../src/documents.js";
+import { buildFacts } from "../src/jobs.js";
+import { renderCoverLetter, renderResume } from "../src/pdf.js";
+import { createStore } from "../src/store.js";
 
 const profile: Profile = {
   ...EMPTY_PROFILE,
