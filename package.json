@@ -16,6 +16,6 @@
     "start": "pnpm --parallel --filter @draftline/server --filter @draftline/web start"
   },
   "devDependencies": {
-    "typescript": "~5.9"
+    "typescript": "~7.0"
   }
 }
