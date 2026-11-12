@@ -33,6 +33,7 @@ import {
   type ApiError,
   TailoredResumeSchema,
   TrackingUpdateSchema,
+  type AlertsResponse,
   type AnswerDraft,
   type DiscoveryState,
   type DocumentKind,
@@ -48,7 +49,7 @@ import {
 import { aiSettingsView, type AiService } from "./ai.js";
 import { AiError } from "./ai-error.js";
 import { fetchBoard, parseBoardUrl } from "./boards.js";
-import { discoveryDeps, isDiscoveryRunning, runDiscovery } from "./discovery.js";
+import { discoveryDeps, isDiscoveryRunning, nextRunAt, runDiscovery } from "./discovery.js";
 import { cleanTailoredResume, draftCoverLetter, tailorResume } from "./documents.js";
 import { analyzeJob, buildFacts, draftAnswers } from "./jobs.js";
 import { documentFileName, renderCoverLetter, renderResume } from "./pdf.js";
@@ -440,6 +441,12 @@ export function createApp({ store, ai, hasEnvClaudeKey, fetchBoards }: Deps) {
       lastRunAt: run.lastRunAt,
       lastRunSummary: run.lastSummary,
       running: isDiscoveryRunning(),
+      nextRunAt: nextRunAt(
+        run.lastRunAt,
+        store.getDiscoveryPreferences().refreshMinutes,
+        store.listSources().length > 0,
+      ),
+      unseenCount: store.countUnseen(),
     };
   };
   const refresh = () =>
@@ -480,6 +487,23 @@ export function createApp({ store, ai, hasEnvClaudeKey, fetchBoards }: Deps) {
       ? c.json<DiscoveryState>(discoveryState())
       : c.json(fail("Board not found"), 404),
   );
+
+  // New jobs since a time, for the extension's desktop notifications. The
+  // extension passes back `now` from the previous answer as the next `since`.
+  app.get("/api/discovery/alerts", (c) => {
+    const since = c.req.query("since");
+    const now = new Date().toISOString();
+    if (!since || Number.isNaN(Date.parse(since))) {
+      return c.json<AlertsResponse>({ jobs: [], now });
+    }
+    return c.json<AlertsResponse>({ jobs: store.alertsSince(since), now });
+  });
+
+  // The Discover tab was looked at: everything listed counts as seen.
+  app.post("/api/discovery/seen", (c) => {
+    store.markAllSeen();
+    return c.json({ ok: true });
+  });
 
   app.post("/api/discovery/refresh", async (c) => {
     await refresh();

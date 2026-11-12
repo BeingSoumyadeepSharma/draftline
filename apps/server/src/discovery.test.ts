@@ -7,7 +7,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_PROFILE, type DiscoveryPreferences } from "@draftline/shared";
 import { createApp } from "./app.js";
 import { decodeEntities, fetchBoard, htmlToText, parseBoardUrl, type BoardJob } from "./boards.js";
-import { AI_BATCH, mentions, passesPreferences, rankWithAi, ruleScore, runDiscovery } from "./discovery.js";
+import {
+  AI_BATCH,
+  isRunDue,
+  mentions,
+  nextRunAt,
+  passesPreferences,
+  rankWithAi,
+  ruleScore,
+  runDiscovery,
+} from "./discovery.js";
 import { buildFacts } from "./jobs.js";
 import { createStore } from "./store.js";
 
@@ -79,7 +88,13 @@ const job = (overrides: Partial<BoardJob> = {}): BoardJob => ({
   ...overrides,
 });
 
-const allPrefs: DiscoveryPreferences = { keywords: [], exclude: [], locations: [], useAi: true };
+const allPrefs: DiscoveryPreferences = {
+  keywords: [],
+  exclude: [],
+  locations: [],
+  useAi: true,
+  refreshMinutes: 15,
+};
 
 describe("reading board addresses", () => {
   it("accepts each site's board address and nothing else", () => {
@@ -203,7 +218,9 @@ describe("runDiscovery", () => {
       fetchFn: fakeBoards(),
     });
 
-    expect(summary).toContain("3 new matching jobs");
+    // A board's first check is its starting list, not newly posted jobs.
+    expect(summary).toContain("0 newly posted matching jobs");
+    expect(store.listDiscovered().every((j) => j.baseline)).toBe(true);
     const jobs = store.listDiscovered();
     expect(jobs.map((j) => j.title).sort()).toEqual([
       "Backend Engineer",
@@ -317,6 +334,93 @@ describe("discovery API", () => {
       exclude: [],
       locations: ["Remote"],
       useAi: false,
+      refreshMinutes: 15,
     });
+
+    const tooFast = await app.request("/api/discovery/preferences", {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ keywords: [], exclude: [], locations: [], useAi: false, refreshMinutes: 1 }),
+    });
+    expect(tooFast.status).toBe(400);
+  });
+});
+
+describe("live tracking", () => {
+  let store: ReturnType<typeof createStore>;
+  const deps = { generate: null, buildFacts: (p: typeof EMPTY_PROFILE) => buildFacts(p, []) };
+  const posting = (i: number) => ({
+    title: `Engineer ${i}`, location: "Remote", isListed: true, jobUrl: `https://jobs.ashbyhq.com/live/${i}`, descriptionPlain: "TypeScript",
+  });
+  const boardWith = (...ids: number[]) =>
+    fakeBoards({ "job-board/live": () => json({ jobs: ids.map(posting) }) });
+
+  beforeEach(() => {
+    store = createStore(":memory:");
+    store.addSource("ashby", "live", "https://jobs.ashbyhq.com/live");
+  });
+
+  it("alerts only on jobs that appear after the board was added", async () => {
+    await runDiscovery(store, { ...deps, fetchFn: boardWith(1, 2) });
+    const before = new Date(Date.now() - 1).toISOString();
+    expect(store.alertsSince(before)).toEqual([]);
+
+    const summary = await runDiscovery(store, { ...deps, fetchFn: boardWith(1, 2, 3) });
+    expect(summary).toContain("1 newly posted matching job");
+    expect(store.alertsSince(before).map((a) => a.title)).toEqual(["Engineer 3"]);
+    expect(store.alertsSince(new Date().toISOString())).toEqual([]);
+  });
+
+  it("counts unseen new jobs until the Discover tab is opened", async () => {
+    await runDiscovery(store, { ...deps, fetchFn: boardWith(1) });
+    await runDiscovery(store, { ...deps, fetchFn: boardWith(1, 2, 3) });
+    expect(store.countUnseen()).toBe(2);
+    store.markAllSeen();
+    expect(store.countUnseen()).toBe(0);
+  });
+
+  it("doesn't alert on dismissed jobs", async () => {
+    await runDiscovery(store, { ...deps, fetchFn: boardWith(1) });
+    const before = new Date(Date.now() - 1).toISOString();
+    await runDiscovery(store, { ...deps, fetchFn: boardWith(1, 2) });
+    const [alert] = store.alertsSince(before);
+    store.setDiscoveredStatus(alert!.id, "dismissed");
+    expect(store.alertsSince(before)).toEqual([]);
+  });
+
+  it("schedules checks by the chosen interval", () => {
+    const now = Date.parse("2026-11-12T10:00:00Z");
+    expect(isRunDue(null, 15, now)).toBe(true);
+    expect(isRunDue("2026-11-12T09:50:00Z", 15, now)).toBe(false);
+    expect(isRunDue("2026-11-12T09:45:00Z", 15, now)).toBe(true);
+    expect(nextRunAt("2026-11-12T09:50:00Z", 15, true)).toBe("2026-11-12T10:05:00.000Z");
+    expect(nextRunAt("2026-11-12T09:50:00Z", 15, false)).toBeNull();
+  });
+
+  it("serves alerts and marks jobs seen through the API", async () => {
+    const app = createApp({
+      store,
+      ai: { parseResume: vi.fn(), generate: vi.fn() as never },
+      hasEnvClaudeKey: () => false,
+    });
+    const HOST = { host: "127.0.0.1:8787" };
+    await runDiscovery(store, { ...deps, fetchFn: boardWith(1) });
+    const before = new Date(Date.now() - 1).toISOString();
+    await runDiscovery(store, { ...deps, fetchFn: boardWith(1, 2) });
+
+    const alerts = await (
+      await app.request(`/api/discovery/alerts?since=${encodeURIComponent(before)}`, { headers: HOST })
+    ).json();
+    expect(alerts.jobs.map((j: { title: string }) => j.title)).toEqual(["Engineer 2"]);
+    expect(Date.parse(alerts.now)).not.toBeNaN();
+
+    const noSince = await (await app.request("/api/discovery/alerts", { headers: HOST })).json();
+    expect(noSince.jobs).toEqual([]);
+
+    const state = await (await app.request("/api/discovery", { headers: HOST })).json();
+    expect(state.unseenCount).toBe(1);
+    expect(state.nextRunAt).not.toBeNull();
+    await app.request("/api/discovery/seen", { method: "POST", headers: HOST });
+    expect((await (await app.request("/api/discovery", { headers: HOST })).json()).unseenCount).toBe(0);
   });
 });

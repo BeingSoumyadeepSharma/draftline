@@ -9,7 +9,9 @@
  *      AI_BATCH per run, in one request. As elsewhere, the AI sees only
  *      profile facts and treats postings as untrusted text.
  *
- * Runs once a day while the server is running (see index.ts), or on demand.
+ * Runs on the user's chosen interval while the server is running (see
+ * index.ts), or on demand. Jobs already listed when a board is added are
+ * marked "baseline" so only jobs that appear later trigger alerts.
  */
 import { AiRankingOutputSchema, type DiscoveryPreferences, type Profile } from "@draftline/shared";
 import { aiSettingsView, type AiService, type Generate } from "./ai.js";
@@ -100,6 +102,18 @@ export async function rankWithAi(
 let running = false;
 export const isDiscoveryRunning = () => running;
 
+/** When the next automatic check is due, or null when there's nothing to check. */
+export function nextRunAt(lastRunAt: string | null, refreshMinutes: number, hasSources: boolean): string | null {
+  if (!hasSources) return null;
+  if (!lastRunAt) return new Date().toISOString();
+  return new Date(Date.parse(lastRunAt) + refreshMinutes * 60_000).toISOString();
+}
+
+/** True when an automatic check should run now. */
+export function isRunDue(lastRunAt: string | null, refreshMinutes: number, now = Date.now()): boolean {
+  return !lastRunAt || now - Date.parse(lastRunAt) >= refreshMinutes * 60_000;
+}
+
 type RunDeps = {
   /** null when no AI provider is set up; ranking is then skipped. */
   generate: Generate | null;
@@ -138,6 +152,8 @@ export async function runDiscovery(store: Store, deps: RunDeps): Promise<string>
         const kept = postings.filter((job) => passesPreferences(job, preferences));
         // Lever and Ashby listings don't name the company; the board does.
         const company = postings.find((job) => job.company)?.company ?? source.label;
+        // On a board's first check, everything listed is the starting point.
+        const baseline = source.lastFetchedAt === null;
         for (const job of kept) {
           const { score, matched } = ruleScore(job, profile.skills);
           const isNew = store.upsertDiscovered(source.id, {
@@ -145,8 +161,8 @@ export async function runDiscovery(store: Store, deps: RunDeps): Promise<string>
             company: job.company || company,
             ruleScore: score,
             matchedSkills: matched,
-          });
-          if (isNew) added++;
+          }, baseline);
+          if (isNew && !baseline) added++;
         }
         store.removeUnlisted(source.id, kept.map((job) => job.url));
         store.recordSourceResult(source.id, { label: company, jobCount: kept.length, error: null });
@@ -157,7 +173,7 @@ export async function runDiscovery(store: Store, deps: RunDeps): Promise<string>
     }
 
     const notes = [
-      `Checked ${sources.length} board${sources.length === 1 ? "" : "s"}; ${added} new matching job${added === 1 ? "" : "s"}.`,
+      `Checked ${sources.length} board${sources.length === 1 ? "" : "s"}; ${added} newly posted matching job${added === 1 ? "" : "s"}.`,
     ];
     if (failed > 0) notes.push(`${failed} board${failed === 1 ? "" : "s"} couldn't be read.`);
 

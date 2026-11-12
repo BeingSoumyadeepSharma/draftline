@@ -44,7 +44,7 @@ Chrome extension (apps/extension)          Local server (apps/server, port 8787)
 
 - Rule-based filling (`apps/extension/src/match.ts`) runs without AI.
 - AI calls always go through the local server, which holds the API key.
-- Job discovery (`apps/server/src/discovery.ts`) reads public Greenhouse, Lever and Ashby job board APIs once a day while the server runs.
+- Job discovery (`apps/server/src/discovery.ts`) reads public Greenhouse, Lever and Ashby job board APIs on your chosen interval (every 15 minutes by default) while the server runs, and the extension shows a desktop notification for each newly posted match.
 - Types and schemas shared by all three parts live in `packages/shared`.
 
 Each source file starts with a comment explaining its job; start with

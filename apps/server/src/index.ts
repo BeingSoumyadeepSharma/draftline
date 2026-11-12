@@ -12,7 +12,7 @@ import { serve } from "@hono/node-server";
 import { config } from "dotenv";
 import { createAi } from "./ai.js";
 import { createApp, SERVER_PORT } from "./app.js";
-import { discoveryDeps, runDiscovery } from "./discovery.js";
+import { discoveryDeps, isDiscoveryRunning, isRunDue, runDiscovery } from "./discovery.js";
 import { createStore } from "./store.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -29,19 +29,19 @@ const hasEnvClaudeKey = () =>
 
 const app = createApp({ store, ai, hasEnvClaudeKey });
 
-// Job discovery refreshes once a day while the server runs: checked hourly,
-// and soon after startup in case the computer was off at the usual time.
-const DAY_MS = 24 * 60 * 60 * 1000;
+// Job discovery checks the boards on the user's chosen interval (every 15
+// minutes by default) while the server runs. A once-a-minute tick decides
+// whether a check is due, so interval changes apply without a restart.
 function refreshDiscoveryIfDue() {
   const { lastRunAt } = store.getDiscoveryRun();
-  if (store.listSources().length === 0) return;
-  if (lastRunAt && Date.now() - Date.parse(lastRunAt) < DAY_MS) return;
+  if (store.listSources().length === 0 || isDiscoveryRunning()) return;
+  if (!isRunDue(lastRunAt, store.getDiscoveryPreferences().refreshMinutes)) return;
   runDiscovery(store, discoveryDeps(store, ai, hasEnvClaudeKey))
     .then((summary) => console.log(`Job discovery: ${summary}`))
     .catch((error) => console.error("Job discovery failed:", error));
 }
 setTimeout(refreshDiscoveryIfDue, 15_000);
-setInterval(refreshDiscoveryIfDue, 60 * 60 * 1000);
+setInterval(refreshDiscoveryIfDue, 60_000);
 
 serve({ fetch: app.fetch, hostname: "127.0.0.1", port: SERVER_PORT }, () => {
   console.log(`Draftline API running on http://127.0.0.1:${SERVER_PORT}`);

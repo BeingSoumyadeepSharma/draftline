@@ -1,9 +1,10 @@
 /**
  * Builds the extension into dist/. It bundles the service worker, content script
- * and side panel with esbuild, and copies manifest.json and the panel's HTML.
+ * and side panel with esbuild, and copies manifest.json, the panel's HTML and
+ * the icons.
  * `--watch` rebuilds on every change. Load dist/ in chrome://extensions.
  */
-import { copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, rmSync } from "node:fs";
 import * as esbuild from "esbuild";
 
 const watch = process.argv.includes("--watch");
@@ -12,6 +13,7 @@ rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist", { recursive: true });
 copyFileSync("manifest.json", "dist/manifest.json");
 copyFileSync("src/sidepanel/index.html", "dist/sidepanel.html");
+cpSync("icons", "dist/icons", { recursive: true });
 
 const options = {
   entryPoints: {

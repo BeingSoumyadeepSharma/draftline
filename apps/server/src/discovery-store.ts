@@ -4,8 +4,9 @@
  *
  * Tables:
  *   discovery_sources   company job boards to check
- *   discovered_jobs     postings that passed the user's filters, with scores
- *                       and whether they were saved or dismissed
+ *   discovered_jobs     postings that passed the user's filters, with scores,
+ *                       whether they were saved, dismissed or seen, and whether
+ *                       they were already listed when their board was added
  *   discovery_settings  one row: filters, AI on/off, and the last run
  */
 import { randomUUID } from "node:crypto";
@@ -15,6 +16,7 @@ import type {
   DiscoveredJob,
   DiscoveryPreferences,
   DiscoverySource,
+  JobAlert,
 } from "@draftline/shared";
 import type { BoardJob } from "./boards.js";
 
@@ -23,17 +25,22 @@ const DEFAULT_PREFERENCES: DiscoveryPreferences = {
   exclude: [],
   locations: [],
   useAi: true,
+  refreshMinutes: 15,
 };
 
 const JOB_COLUMNS = `id, source_id AS sourceId, url, title, company, location,
   posted_at AS postedAt, first_seen_at AS firstSeenAt, rule_score AS ruleScore,
   matched_skills AS matchedSkills, ai_score AS aiScore, ai_reason AS aiReason,
-  status, job_id AS jobId`;
+  status, job_id AS jobId, baseline, seen_at AS seenAt`;
 
-type JobRow = Omit<DiscoveredJob, "matchedSkills"> & { matchedSkills: string };
-const toJob = ({ matchedSkills, ...row }: JobRow): DiscoveredJob => ({
+type JobRow = Omit<DiscoveredJob, "matchedSkills" | "baseline"> & {
+  matchedSkills: string;
+  baseline: number;
+};
+const toJob = ({ matchedSkills, baseline, ...row }: JobRow): DiscoveredJob => ({
   ...row,
   matchedSkills: JSON.parse(matchedSkills) as string[],
+  baseline: baseline === 1,
 });
 
 export function createDiscoveryStore(db: DatabaseSync) {
@@ -64,7 +71,9 @@ export function createDiscoveryStore(db: DatabaseSync) {
       ai_score INTEGER,
       ai_reason TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'new',
-      job_id TEXT
+      job_id TEXT,
+      baseline INTEGER NOT NULL DEFAULT 0,
+      seen_at TEXT
     );
     CREATE TABLE IF NOT EXISTS discovery_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -73,6 +82,17 @@ export function createDiscoveryStore(db: DatabaseSync) {
       last_summary TEXT NOT NULL DEFAULT ''
     );
   `);
+
+  // Tables made before live tracking lack these columns; adding them keeps data.
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(discovered_jobs)").all() as unknown as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  if (!columns.has("baseline")) {
+    db.exec("ALTER TABLE discovered_jobs ADD COLUMN baseline INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!columns.has("seen_at")) db.exec("ALTER TABLE discovered_jobs ADD COLUMN seen_at TEXT");
 
   const settingsRow = () =>
     db.prepare("SELECT preferences, last_run_at AS lastRunAt, last_summary AS lastSummary FROM discovery_settings WHERE id = 1").get() as unknown as
@@ -148,6 +168,7 @@ export function createDiscoveryStore(db: DatabaseSync) {
     upsertDiscovered(
       sourceId: string,
       job: BoardJob & { ruleScore: number; matchedSkills: string[] },
+      baseline = false,
     ): boolean {
       const existing = db
         .prepare("SELECT description FROM discovered_jobs WHERE url = ?")
@@ -155,11 +176,12 @@ export function createDiscoveryStore(db: DatabaseSync) {
       if (!existing) {
         db.prepare(
           `INSERT INTO discovered_jobs (id, source_id, url, title, company, location, description,
-             posted_at, first_seen_at, rule_score, matched_skills)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             posted_at, first_seen_at, rule_score, matched_skills, baseline)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           randomUUID(), sourceId, job.url, job.title, job.company, job.location, job.description,
           job.postedAt, new Date().toISOString(), job.ruleScore, JSON.stringify(job.matchedSkills),
+          baseline ? 1 : 0,
         );
         return true;
       }
@@ -218,6 +240,33 @@ export function createDiscoveryStore(db: DatabaseSync) {
         .prepare(`SELECT ${JOB_COLUMNS}, description FROM discovered_jobs WHERE id = ?`)
         .get(id) as unknown as (JobRow & { description: string }) | undefined;
       return row ? { ...toJob(row), description: row.description } : null;
+    },
+
+    /** New jobs that appeared after `since`, for desktop notifications. */
+    alertsSince(since: string): JobAlert[] {
+      return db
+        .prepare(
+          `SELECT id, title, company, location, url FROM discovered_jobs
+           WHERE status = 'new' AND baseline = 0 AND first_seen_at > ?
+           ORDER BY first_seen_at DESC LIMIT 20`,
+        )
+        .all(since) as unknown as JobAlert[];
+    },
+
+    /** New jobs found after their board was added that the user hasn't seen. */
+    countUnseen(): number {
+      const row = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM discovered_jobs WHERE baseline = 0 AND seen_at IS NULL AND status != 'dismissed'",
+        )
+        .get() as unknown as { n: number };
+      return row.n;
+    },
+
+    markAllSeen(): void {
+      db.prepare("UPDATE discovered_jobs SET seen_at = ? WHERE seen_at IS NULL").run(
+        new Date().toISOString(),
+      );
     },
 
     setAiScore(id: string, score: number, reason: string): void {

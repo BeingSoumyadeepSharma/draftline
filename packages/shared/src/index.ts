@@ -455,6 +455,9 @@ export type DiscoverySource = {
 
 const termList = z.array(z.string().trim().min(1).max(100)).max(30);
 
+/** Allowed check intervals in minutes. Five is the floor, to be polite to the boards. */
+export const REFRESH_CHOICES = [5, 15, 30, 60, 1440] as const;
+
 /** What to keep from each board. Empty lists don't filter anything. */
 export const DiscoveryPreferencesSchema = z.object({
   /** At least one must appear in the job title. */
@@ -465,6 +468,11 @@ export const DiscoveryPreferencesSchema = z.object({
   locations: termList,
   /** Whether to ask the AI to score the most promising new jobs. */
   useAi: z.boolean(),
+  /** How often to check the boards, in minutes. */
+  refreshMinutes: z
+    .number()
+    .refine((m) => (REFRESH_CHOICES as readonly number[]).includes(m), "Unsupported interval")
+    .default(15),
 });
 export type DiscoveryPreferences = z.infer<typeof DiscoveryPreferencesSchema>;
 
@@ -488,7 +496,24 @@ export type DiscoveredJob = {
   status: "new" | "saved" | "dismissed";
   /** The tracker's job, once saved to Applications. */
   jobId: string | null;
+  /**
+   * Already listed when the board was added. These never trigger alerts,
+   * so adding a board with many open jobs doesn't flood the user.
+   */
+  baseline: boolean;
+  /** When the user first saw it in the Discover tab. */
+  seenAt: string | null;
 };
+
+/** A new matching job, for a desktop notification. */
+export type JobAlert = {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  url: string;
+};
+export type AlertsResponse = { jobs: JobAlert[]; now: string };
 
 export type DiscoveryState = {
   preferences: DiscoveryPreferences;
@@ -497,6 +522,10 @@ export type DiscoveryState = {
   lastRunAt: string | null;
   lastRunSummary: string;
   running: boolean;
+  /** When the next automatic check is due, if any boards are added. */
+  nextRunAt: string | null;
+  /** New jobs (found after their board was added) not yet seen. */
+  unseenCount: number;
 };
 
 /** What the model returns when ranking several jobs at once, before checks. */

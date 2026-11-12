@@ -535,3 +535,22 @@ a.ghost {
   padding: 7px 12px;
   text-decoration: none;
 }
+
+.shortlist-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin: 24px 0 10px;
+}
+
+.shortlist-head .shortlist-title,
+.shortlist-head .filters {
+  margin: 0;
+}
+
+.found-job.unseen {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}

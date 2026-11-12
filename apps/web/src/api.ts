@@ -57,6 +57,7 @@ export const api = {
   removeDiscoverySource: (id: string) =>
     request<DiscoveryState>(`/discovery/sources/${id}`, { method: "DELETE" }),
   refreshDiscovery: () => request<DiscoveryState>("/discovery/refresh", { method: "POST" }),
+  markDiscoverySeen: () => request<{ ok: true }>("/discovery/seen", { method: "POST" }),
   saveDiscoveredJob: (id: string) =>
     request<{ jobId: string; state: DiscoveryState }>(`/discovery/jobs/${id}/save`, { method: "POST" }),
   dismissDiscoveredJob: (id: string) =>

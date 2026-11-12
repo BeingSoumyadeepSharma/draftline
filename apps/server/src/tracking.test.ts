@@ -150,3 +150,28 @@ describe("tracker API", () => {
     expect(due).toEqual({ count: 1 });
   });
 });
+
+describe("upgrading discovery tables from before live tracking", () => {
+  it("treats existing discovered jobs as already listed, so they never alert", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "draftline-"));
+    try {
+      const file = path.join(dir, "draftline.db");
+      const old = new DatabaseSync(file);
+      old.exec(`CREATE TABLE discovered_jobs (
+        id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+        company TEXT NOT NULL, location TEXT NOT NULL, description TEXT NOT NULL, posted_at TEXT,
+        first_seen_at TEXT NOT NULL, rule_score INTEGER NOT NULL, matched_skills TEXT NOT NULL,
+        ai_score INTEGER, ai_reason TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'new', job_id TEXT)`);
+      old.prepare(
+        "INSERT INTO discovered_jobs (id, source_id, url, title, company, location, description, first_seen_at, rule_score, matched_skills) VALUES ('d1', 's1', 'https://x.com/1', 'Old', 'X', '', '', '2026-11-11T00:00:00Z', 0, '[]')",
+      ).run();
+      old.close();
+
+      const store = createStore(file);
+      expect(store.listDiscovered()[0]).toMatchObject({ title: "Old", baseline: true, seenAt: null });
+      expect(store.alertsSince("2026-01-01T00:00:00Z")).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
