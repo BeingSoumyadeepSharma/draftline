@@ -31,7 +31,7 @@ Then open http://127.0.0.1:5173. What to know:
 - **Ports** are published on 127.0.0.1 only, so other devices on your network can't reach Draftline.
 - **Ollama** on the same computer keeps working: inside the container, Draftline sends `localhost` addresses to the computer.
 - **The Chrome extension** still runs in Chrome, not Docker: build it with `pnpm build:extension`, or download the zip from a GitHub release.
-- **Linux**: create `data/` before the first start, as above, so the container can write to it.
+- **Linux**: on first start the container may take ownership of `data/` (as its user, ID 1000) so it can write the database. Run Draftline either in Docker or directly from that folder, or give it back with `sudo chown -R $USER data` before running `pnpm dev`.
 
 `docker compose logs -f` shows the logs; `docker compose down` stops it.
 
