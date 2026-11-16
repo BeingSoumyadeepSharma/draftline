@@ -65,6 +65,12 @@ async function getJson<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function deleteJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${API}${path}`, { method: "DELETE" });
+  if (!response.ok) throw await readError(response);
+  return (await response.json()) as T;
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API}${path}`, {
     method: "POST",
@@ -85,11 +91,26 @@ type PageReply<T> =
 async function sendToPage<T>(message: ContentMessage): Promise<PageReply<T>> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id === undefined) return { kind: "unreachable" };
-  try {
-    const data = (await chrome.tabs.sendMessage(tab.id, message)) as T | undefined;
+  const send = async (): Promise<PageReply<T>> => {
+    const data = (await chrome.tabs.sendMessage(tab.id!, message)) as T | undefined;
     return data ? { kind: "ok", data } : { kind: "no_form" };
+  };
+  try {
+    return await send();
   } catch {
-    return { kind: "unreachable" };
+    // Nothing on the page is listening. Usually the tab was open when the
+    // extension was installed or reloaded, so its copy of Draftline is cut
+    // off. Load a fresh copy and ask once more. Chrome only allows this on
+    // the job sites listed in the manifest, so other sites still fail here.
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        files: ["content.js"],
+      });
+      return await send();
+    } catch {
+      return { kind: "unreachable" };
+    }
   }
 }
 
@@ -222,45 +243,97 @@ function TrackingLine({
   );
 }
 
-/** Status of this job's tailored resume and cover letter, with next steps. */
+type DocumentKind = "resume" | "cover_letter";
+
+/**
+ * This job's resume and cover letter, one row each. Each row says what will
+ * be attached when filling and offers the next step: write it with AI,
+ * review it in Draftline, or discard a draft to go back to the saved resume.
+ */
 function DocumentsCard({
   documents,
+  savedResume,
   aiReady,
-  creating,
+  busy,
   onCreate,
+  onDiscard,
   onReview,
 }: {
   documents: JobDocuments | null;
+  /** File name of the resume saved in Draftline, if any. */
+  savedResume: string | null;
   aiReady: boolean;
-  creating: boolean;
-  onCreate: () => void;
+  /** The document being written or discarded right now, if any. */
+  busy: DocumentKind | null;
+  onCreate: (kind: DocumentKind) => void;
+  onDiscard: (kind: DocumentKind) => void;
   onReview: () => void;
 }) {
-  const describe = (doc: { status: "draft" | "approved" } | null | undefined) =>
-    !doc
-      ? "Not created yet"
-      : doc.status === "approved"
-        ? "Approved. Will be attached."
-        : "Draft. Approve it in Draftline to attach it.";
-  const missing = !documents?.resume || !documents?.coverLetter;
-  const exists = Boolean(documents?.resume || documents?.coverLetter);
+  // Without an approved tailored resume, filling attaches the saved one.
+  const fallback = savedResume
+    ? `your saved resume (${savedResume}) is attached`
+    : "no resume is attached, as none is saved in Draftline";
+  const rows = [
+    { kind: "resume" as const, label: "Resume", doc: documents?.resume, action: "Tailor with AI" },
+    {
+      kind: "cover_letter" as const,
+      label: "Cover letter",
+      doc: documents?.coverLetter,
+      action: "Write with AI",
+    },
+  ];
+  /** What filling will attach for this row, in plain words. */
+  const status = (row: (typeof rows)[number]) => {
+    if (row.doc?.status === "approved") return "Tailored version approved. It's attached.";
+    if (row.doc) {
+      return row.kind === "resume"
+        ? `Tailored draft waiting for your review. Until you approve it, ${fallback}.`
+        : "Draft waiting for your review. It's attached once you approve it.";
+    }
+    if (row.kind === "resume") {
+      return savedResume ? `Not tailored, so ${fallback}.` : "Not tailored, and none is saved in Draftline.";
+    }
+    return "None. Nothing is attached.";
+  };
   return (
     <section className="job docs">
       <div className="job-title">Documents for this job</div>
-      <p className="row-note">Resume: {describe(documents?.resume)}</p>
-      <p className="row-note">Cover letter: {describe(documents?.coverLetter)}</p>
-      <div className="docs-actions">
-        {aiReady && missing && (
-          <button className="ghost small" disabled={creating} onClick={onCreate}>
-            {creating ? "Writing…" : exists ? "Create the other with AI" : "Create both with AI"}
-          </button>
-        )}
-        {exists && (
-          <button className="ghost small" onClick={onReview}>
-            Review and approve
-          </button>
-        )}
-      </div>
+      {rows.map((row) => (
+        <div key={row.kind} className="doc-row">
+          <div className="doc-label">{row.label}</div>
+          <p className="row-note">{status(row)}</p>
+          <div className="docs-actions">
+            {row.doc ? (
+              <>
+                <button className="ghost small" onClick={onReview}>
+                  {row.doc.status === "approved" ? "View" : "Review and approve"}
+                </button>
+                <button
+                  className="ghost small"
+                  disabled={busy !== null}
+                  onClick={() => onDiscard(row.kind)}
+                >
+                  {busy === row.kind
+                    ? "Discarding…"
+                    : row.kind === "resume"
+                      ? "Use saved resume"
+                      : "Discard"}
+                </button>
+              </>
+            ) : (
+              aiReady && (
+                <button
+                  className="ghost small"
+                  disabled={busy !== null}
+                  onClick={() => onCreate(row.kind)}
+                >
+                  {busy === row.kind ? "Writing…" : row.action}
+                </button>
+              )
+            )}
+          </div>
+        </div>
+      ))}
     </section>
   );
 }
@@ -346,7 +419,8 @@ function App() {
   const [drafting, setDrafting] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [documents, setDocuments] = useState<JobDocuments | null>(null);
-  const [creatingDocs, setCreatingDocs] = useState(false);
+  const [creatingDoc, setCreatingDoc] = useState<DocumentKind | null>(null);
+  const [savedResume, setSavedResume] = useState<string | null>(null);
   const [marking, setMarking] = useState(false);
   const jobUrl = useRef<string | null>(null);
 
@@ -363,6 +437,7 @@ function App() {
         getJson<Status>("/status"),
       ]);
       data = { profile, answers, resumeName: resume?.name ?? null };
+      setSavedResume(data.resumeName);
       setAiReady(status.aiConfigured);
     } catch {
       setView({ state: "server_down" });
@@ -471,25 +546,34 @@ function App() {
     return record;
   }
 
-  /** Asks the AI for whichever of the two documents doesn't exist yet. */
-  async function createDocuments() {
-    setCreatingDocs(true);
+  /** Throws away this job's tailored document; the saved resume is used again. */
+  async function discardDocument(kind: DocumentKind) {
+    if (!jobRecord) return;
+    const name = kind === "resume" ? "tailored resume" : "cover letter";
+    if (!confirm(`Discard the ${name} for this job? This can't be undone.`)) return;
+    setCreatingDoc(kind);
+    setError(null);
+    try {
+      setDocuments(await deleteJson<JobDocuments>(`/jobs/${jobRecord.id}/documents/${kind}`));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCreatingDoc(null);
+    }
+  }
+
+  /** Asks the AI to write the one document the user chose. */
+  async function createDocument(kind: DocumentKind) {
+    setCreatingDoc(kind);
     setError(null);
     try {
       const record = await ensureJob();
       if (!record) return;
-      let docs = documents;
-      if (!docs?.resume) {
-        docs = await postJson<JobDocuments>(`/jobs/${record.id}/documents/resume/generate`, {});
-      }
-      if (!docs?.coverLetter) {
-        docs = await postJson<JobDocuments>(`/jobs/${record.id}/documents/cover_letter/generate`, {});
-      }
-      setDocuments(docs);
+      setDocuments(await postJson<JobDocuments>(`/jobs/${record.id}/documents/${kind}/generate`, {}));
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setCreatingDocs(false);
+      setCreatingDoc(null);
     }
   }
 
@@ -648,7 +732,7 @@ function App() {
         <p className="muted">
           {view.reachable
             ? "Draftline is running on this page but can't see the form. If it's behind an Apply button, open it, then check again."
-            : "Draftline isn't running on this page. It works on Greenhouse, Lever, Ashby, Workday and LinkedIn Easy Apply. If this is one, reload the page once, then check again."}
+            : "Draftline can't run on this page. It works on Greenhouse, Lever, Ashby, Workday and LinkedIn Easy Apply. If this is one of them, reload the page, then check again."}
         </p>
         <button className="ghost" onClick={() => void scan()}>
           Check again
@@ -702,9 +786,11 @@ function App() {
       {view.job && (aiReady || documents?.resume || documents?.coverLetter) && (
         <DocumentsCard
           documents={documents}
+          savedResume={savedResume}
           aiReady={aiReady}
-          creating={creatingDocs}
-          onCreate={() => void createDocuments()}
+          busy={creatingDoc}
+          onCreate={(kind) => void createDocument(kind)}
+          onDiscard={(kind) => void discardDocument(kind)}
           onReview={openReview}
         />
       )}

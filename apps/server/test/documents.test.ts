@@ -210,6 +210,19 @@ describe("document API", () => {
     expect(list[0]).toMatchObject({ id: jobId, resumeStatus: "approved", coverLetterStatus: null });
   });
 
+  it("discards a document so the saved resume is used again", async () => {
+    generate.mockResolvedValue({ paragraphs: ["Hello."], sourceIds: [], note: "" });
+    await call("/cover_letter/generate", "POST");
+    await call("/cover_letter/approve", "POST");
+
+    const after = await (await call("/cover_letter", "DELETE")).json();
+    expect(after.coverLetter).toBeNull();
+    expect((await call("/cover_letter/file")).status).toBe(404);
+    // Discarding twice is harmless.
+    expect((await call("/cover_letter", "DELETE")).status).toBe(200);
+    expect((await call("/letter", "DELETE")).status).toBe(400);
+  });
+
   it("withdraws an approval when the draft is edited again", async () => {
     generate.mockResolvedValue({ paragraphs: ["Hello."], sourceIds: [], note: "" });
     await call("/cover_letter/generate", "POST");

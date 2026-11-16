@@ -395,6 +395,15 @@ export function createApp({ store, ai, hasEnvClaudeKey, fetchBoards, env }: Deps
     return c.json<JobDocuments>(store.getDocuments(target.row.id));
   });
 
+  // Discards a draft or approved document. For the resume, filling then
+  // attaches the resume saved in Draftline again.
+  app.delete("/api/jobs/:id/documents/:kind", (c) => {
+    const target = documentTarget(c);
+    if (target.error) return target.error;
+    store.deleteDocument(target.row.id, target.kind);
+    return c.json<JobDocuments>(store.getDocuments(target.row.id));
+  });
+
   // The approved PDF, for the extension to attach.
   app.get("/api/jobs/:id/documents/:kind/file", (c) => {
     const target = documentTarget(c);

@@ -502,6 +502,12 @@ export function createStore(path: string) {
       ).run(pdf, fileName, now, now, jobId, kind);
     },
 
+    /** Removes a job's document, so the saved resume is used again. */
+    deleteDocument(jobId: string, kind: DocumentKind): boolean {
+      return db.prepare("DELETE FROM documents WHERE job_id = ? AND kind = ?").run(jobId, kind)
+        .changes > 0;
+    },
+
     /** The approved PDF, or null when the document isn't approved. */
     getApprovedFile(jobId: string, kind: DocumentKind): { name: string; data: Uint8Array } | null {
       const row = db

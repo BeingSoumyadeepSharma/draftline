@@ -289,11 +289,33 @@ button.small {
   margin: 2px 0 0;
 }
 
+.doc-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.doc-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Text buttons sit flush with the text above them: the negative margin
+   cancels the button's own padding. */
 .docs-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin: 4px 0 0 -8px;
+  margin: 2px 0 0 -8px;
+}
+
+/* Overrides the general .job .ghost offset, which the row already applies. */
+.docs-actions .ghost {
+  margin: 0;
+}
+
+.docs-actions:empty {
+  display: none;
 }
 
 .tracking-line {

@@ -92,6 +92,21 @@ async function readJob(): Promise<PageJob | null> {
 // The job on this page, kept ready so a submit click can record it at once,
 // before the site navigates away.
 let currentJob: PageJob | null = null;
+/**
+ * After the extension is reloaded or updated, this copy of the script keeps
+ * running in tabs that were already open, but it can no longer reach the
+ * extension: every chrome.* call throws "Extension context invalidated".
+ * So each call checks first, and the script stops itself once cut off.
+ * Reloading the tab loads the new copy.
+ */
+const extensionAlive = () => {
+  try {
+    return Boolean(chrome.runtime?.id);
+  } catch {
+    return false;
+  }
+};
+
 const refreshCurrentJob = () => {
   if (detectFields(document, location.hostname)) {
     void readJob().then((job) => (currentJob = job ?? currentJob));
@@ -100,15 +115,21 @@ const refreshCurrentJob = () => {
 refreshCurrentJob();
 
 const onPossibleSubmit = (target: EventTarget | null) => {
+  if (!extensionAlive()) return stop();
   if (!(target instanceof Element) || !detectFields(document, location.hostname)) return;
-  if (isSubmitControl(target)) void rememberSubmission(currentJob, location.href);
+  if (isSubmitControl(target)) {
+    rememberSubmission(currentJob, location.href).catch(() => {});
+  }
 };
-document.addEventListener("click", (event) => onPossibleSubmit(event.target), true);
-document.addEventListener("submit", (event) => onPossibleSubmit(event.submitter ?? null), true);
+const onClick = (event: MouseEvent) => onPossibleSubmit(event.target);
+const onSubmit = (event: SubmitEvent) => onPossibleSubmit(event.submitter ?? null);
+document.addEventListener("click", onClick, true);
+document.addEventListener("submit", onSubmit, true);
 
 // A confirmation can be a new page or the same page changing; check both.
-const checkConfirmation = () =>
-  void checkForConfirmation(document.body?.innerText ?? "", location.hostname);
+const checkConfirmation = () => {
+  checkForConfirmation(document.body?.innerText ?? "", location.hostname).catch(() => {});
+};
 checkConfirmation();
 
 /**
@@ -117,9 +138,10 @@ checkConfirmation();
  */
 let lastFieldKeys = "";
 let changeTimer: ReturnType<typeof setTimeout> | undefined;
-new MutationObserver(() => {
+const observer = new MutationObserver(() => {
   clearTimeout(changeTimer);
   changeTimer = setTimeout(() => {
+    if (!extensionAlive()) return stop();
     checkConfirmation();
     refreshCurrentJob();
     const keys = (detectFields(document, location.hostname) ?? [])
@@ -136,7 +158,16 @@ new MutationObserver(() => {
         // No side panel open: nothing to tell.
       });
   }, 700);
-}).observe(document.documentElement, { childList: true, subtree: true });
+});
+observer.observe(document.documentElement, { childList: true, subtree: true });
+
+/** Detaches this orphaned copy from the page once the extension is gone. */
+function stop() {
+  observer.disconnect();
+  clearTimeout(changeTimer);
+  document.removeEventListener("click", onClick, true);
+  document.removeEventListener("submit", onSubmit, true);
+}
 
 // Applications can be embedded in an iframe. Only the frame holding the form
 // replies, so the side panel gets a single answer.
