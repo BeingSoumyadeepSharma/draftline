@@ -41,7 +41,9 @@ Then open http://127.0.0.1:5173. What to know:
 pnpm build:extension
 ```
 
-In Chrome, open `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and select `apps/extension/dist`. Click the Draftline toolbar icon on a Greenhouse, Lever, Ashby, Workday or LinkedIn Easy Apply application to open the side panel. Reload any application page that was already open.
+In Chrome, open `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and select `apps/extension/dist`. Click the Draftline toolbar icon on a Greenhouse, Lever, Ashby, Workday or LinkedIn Easy Apply application to open the side panel. Pages that were already open work without a refresh: the side panel loads the page script into a tab that doesn't answer, which is what the `scripting` permission is for. This also covers reloading the extension, for example after a rebuild.
+
+The side panel's **Documents** card has one row per document (resume and cover letter), each saying what filling will attach. From a row you can tailor the resume or write the cover letter with AI, review the draft, or discard it to go back to your saved resume.
 
 Draftline fills only the fields you leave ticked. It never submits an application, and on multi-step forms it never moves to the next step for you.
 
