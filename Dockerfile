@@ -40,6 +40,9 @@ RUN mkdir -p /app/data && chown node:node /app/data
 # "node" (see docker/entrypoint.sh). The name avoids the Node image's own
 # docker-entrypoint.sh.
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/draftline-entrypoint.sh
+# Strip Windows line endings in case the checkout converted them (see
+# .gitattributes); with them the script can't start.
+RUN sed -i 's/\r$//' /usr/local/bin/draftline-entrypoint.sh
 ENTRYPOINT ["draftline-entrypoint.sh"]
 EXPOSE 8787 5173
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
